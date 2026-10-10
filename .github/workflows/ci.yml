@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y pkg-config cmake libudev-dev libssl-dev libsdl2-dev libwayland-dev libxkbcommon-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+      - run: cargo test --workspace
+
+  frontend-and-scripts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax
+        run: |
+          find app/frontend/js app/chromium-ext -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Shell syntax
+        run: |
+          grep -rlE '^#!.*(ba)?sh' setup tools kernel experimental/androidauto-setup | xargs -n1 bash -n
+      - name: Python syntax
+        run: |
+          find . -name '*.py' -not -path './target/*' -print0 | xargs -0 python3 -m py_compile

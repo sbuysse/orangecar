@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""rascar-4g-radio — switch the 4G stick's radio on.
+
+The D-Link DWM-222W (ASR PXA1802, USB 1286:4e31) boots with its radio off
+(AT+CFUN: 4) and nothing in its web UI turns it on, so it never registers.
+Its AT port is one of the vendor interfaces the `option` driver serves once
+told about the id (see 90-rascar-4g.rules). This finds the tty that answers
+AT, and sends AT+CFUN=1 when the radio is off. Run by udev (via systemd) each
+time the stick appears, i.e. at boot and after the stick resets itself.
+"""
+import glob, os, re, select, sys, termios, time
+
+def at(fd, cmd, wait=3.0):
+    termios.tcflush(fd, termios.TCIFLUSH)
+    os.write(fd, (cmd + '\r').encode())
+    out, end = b'', time.time() + wait
+    while time.time() < end:
+        if select.select([fd], [], [], 0.2)[0]:
+            out += os.read(fd, 4096)
+            if re.search(rb'^(OK|ERROR|\+CME ERROR.*)\r?$', out, re.M):
+                break
+    return out.decode(errors='replace')
+
+def ok(reply):
+    # A whole "OK" line: port 0 is a debug log whose text contains "...IsOK".
+    return re.search(r'^OK\r?$', reply, re.M) is not None
+
+def open_tty(path):
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    a = termios.tcgetattr(fd)
+    a[0] = a[1] = a[3] = 0
+    a[2] |= termios.CLOCAL | termios.CREAD
+    termios.tcsetattr(fd, termios.TCSANOW, a)
+    return fd
+
+def stick_ttys():
+    """ttyUSB nodes that belong to the 1286:4e31 stick."""
+    for dev in sorted(glob.glob('/sys/class/tty/ttyUSB*')):
+        usb = os.path.realpath(os.path.join(dev, 'device', '..', '..'))
+        try:
+            ids = (open(f'{usb}/idVendor').read().strip(), open(f'{usb}/idProduct').read().strip())
+        except OSError:
+            continue
+        if ids == ('1286', '4e31'):
+            yield '/dev/' + os.path.basename(dev)
+
+def main():
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        for tty in stick_ttys():
+            try:
+                fd = open_tty(tty)
+            except OSError:
+                continue
+            try:
+                if not ok(at(fd, 'ATE0', 2)):
+                    continue
+                state = at(fd, 'AT+CFUN?')
+                m = re.search(r'^\+CFUN: *(\d+)', state, re.M)
+                if not m:
+                    continue
+                if m.group(1) == '1':
+                    print(f'{tty}: radio already on')
+                    return 0
+                print(f'{tty}: radio off (CFUN {m.group(1)}), switching on')
+                reply = at(fd, 'AT+CFUN=1', 15)
+                if ok(reply):
+                    print(f'{tty}: radio on')
+                    return 0
+                print(f'{tty}: AT+CFUN=1 refused: {reply.strip()!r}')
+            finally:
+                os.close(fd)
+        time.sleep(3)
+    print('no AT port answered on the 4G stick', file=sys.stderr)
+    return 1
+
+sys.exit(main())

@@ -1,0 +1,5 @@
+/* Disney+ hides its page (html{display:none}) unless it is the top window and
+   otherwise tries to break out of the frame (top.location = self.location).
+   The dashboard's sandbox blocks the break-out; this undoes the self-hiding,
+   which is what left a black screen. */
+html { display: block !important; }

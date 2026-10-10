@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="google" content="notranslate">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no">
+    <title>RasCar Dashboard</title>
+    <link rel="stylesheet" href="/css/dashboard.css?v=20261010os">
+    <!-- Applies the saved theme before first paint (no flash of the default). -->
+    <script src="/js/theme-boot.js?v=20260925"></script>
+    <script src="/js/kiosklog.js?v=20261001"></script>
+    <link rel="stylesheet" href="/css/media.css?v=20260925">
+    <link rel="stylesheet" href="/css/cell.css?v=20261009">
+    <link rel="stylesheet" href="/css/phone.css?v=20261010os">
+    <!-- Vendored locally for offline car-appliance use (pinned: FA 6.5.1, Leaflet 1.9.4, hls.js 1.5.13) -->
+    <link rel="stylesheet" href="/vendor/font-awesome/css/all.min.css">
+    <link rel="stylesheet" href="/vendor/leaflet/leaflet.css">
+    <link rel="stylesheet" href="/vendor/maplibre/maplibre-gl.css">
+    <script src="/vendor/leaflet/leaflet.js"></script>
+    <script src="/vendor/hls.min.js"></script>
+</head>
+<body>
+    <!-- Ambient light: a thin sweeping line on the top edge (cabin-light cue) -->
+    <div class="ambient-line" aria-hidden="true"><div class="ambient-line-sweep"></div></div>
+
+    <!-- Dock: permanent navigation (replaces the page dots / home popup as the
+         primary way around). data-page ties each button to its page. -->
+    <nav id="dock" aria-label="Main">
+        <span id="sb-clock" class="dock-clock">--:--</span>
+        <button class="dock-btn" data-page="4" onclick="goToPage(4)" aria-label="Home"><i class="fas fa-house"></i></button>
+        <button class="dock-btn" data-page="3" onclick="goToPage(3)" aria-label="Navigation"><i class="fas fa-location-arrow"></i></button>
+        <button class="dock-btn" data-page="8" onclick="goToPage(8)" aria-label="Radio"><i class="fas fa-music"></i></button>
+        <button class="dock-btn" data-page="5" onclick="goToPage(5)" aria-label="Calendar"><i class="fas fa-calendar"></i></button>
+        <button class="dock-btn" data-page="1" onclick="goToPage(1)" aria-label="Vehicle"><i class="fas fa-car"></i></button>
+        <button class="dock-btn" data-page="6" onclick="goToPage(6)" aria-label="Apps"><i class="fas fa-grip"></i></button>
+        <div class="dock-spacer"></div>
+        <button id="sb-settings" class="dock-btn dock-btn-small" onclick="toggleSettings()" aria-label="Settings"><i class="fas fa-gear"></i></button>
+    </nav>
+
+    <div id="app-main">
+    <!-- Status row: live readings only (navigation lives in the dock) -->
+    <div id="status-bar">
+        <div class="sb-left">
+            <button id="sb-home" class="sb-btn" onclick="toggleNavPopup()" aria-label="All screens">
+                <i class="fas fa-layer-group"></i>
+            </button>
+            <!-- Back to the Jaguar's own screen (rascar-carplay "screen car"); the car's
+                 CarPlay icon brings us back. In the status row: the dock is full at 512px. -->
+            <button id="sb-car-native" class="sb-btn inactive" onclick="carNativeScreen()" aria-label="Car screen"><i class="fas fa-car-rear"></i></button>
+            <span id="sb-speed" class="sb-speed" onclick="goToPage(1)" aria-label="Open the car panel">0 <small>km/h</small></span>
+        </div>
+        <div class="sb-right">
+            <button id="sb-weather" class="sb-btn" onclick="goToPage(11)" aria-label="Open the weather">
+                <i id="sb-weather-icon" class="fas fa-cloud"></i>
+                <span id="sb-weather-temp">--°C</span>
+            </button>
+            <span id="sb-signal" class="sb-signal">
+                <span class="sig-bar"></span>
+                <span class="sig-bar"></span>
+                <span class="sig-bar"></span>
+                <span class="sig-bar"></span>
+                <span class="sig-bar"></span>
+            </span>
+            <!-- 4G stick (services/cell.rs): technology label + the same bars as Wi-Fi;
+                 a warning icon when registered but without internet. Tap = details. -->
+            <button id="sb-cell" class="sb-btn sb-cell" onclick="showCellInfo()" aria-label="4G status">
+                <span id="sb-cell-label" class="sb-cell-label">4G</span>
+                <span class="sb-signal">
+                    <span class="sig-bar"></span>
+                    <span class="sig-bar"></span>
+                    <span class="sig-bar"></span>
+                    <span class="sig-bar"></span>
+                    <span class="sig-bar"></span>
+                </span>
+                <i id="sb-cell-warn" class="fas fa-triangle-exclamation sb-icon sb-cell-warn hidden"></i>
+            </button>
+            <i id="sb-offline" class="fas fa-plug-circle-xmark sb-offline hidden" title="Disconnected"></i>
+            <button class="sb-btn" onclick="openSettings('bluetooth')" aria-label="OBD adapter (Bluetooth) settings">
+                <i id="sb-bt" class="fab fa-bluetooth-b sb-icon"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Page Container (horizontal swipe) -->
+    <div id="pages-container">
+        <div id="pages-track">
+            <!-- Page 0: Trip History -->
+            <div class="page" data-page="0">
+                <div class="page-content trip-history">
+                    <div class="panel-left">
+                        <div id="trip-recording-badge" class="trip-recording-badge hidden">
+                            <i class="fas fa-circle"></i> Recording
+                        </div>
+                        <div id="trip-date-nav" class="trip-date-nav">
+                            <button onclick="tripPrevDay()"><i class="fas fa-chevron-left"></i></button>
+                            <span id="trip-date" class="date-pick" onclick="openTripDatePicker()" role="button" aria-label="Pick a day">Today</span>
+                            <button onclick="tripNextDay()"><i class="fas fa-chevron-right"></i></button>
+                        </div>
+                        <div id="trip-list" class="scrollable trip-list"></div>
+                        <button class="trip-fuel-card" onclick="RasCar.fuel.openManual()" aria-label="Add fuel">
+                            <i class="fas fa-gas-pump"></i>
+                            <span><strong id="tf-balance">No fuel entered</strong><small id="tf-price" class="muted">--</small></span>
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    <div class="panel-right trip-detail">
+                        <!-- Hidden until a trip is picked: these controls used to
+                             float in empty space looking like a stray toolbar. -->
+                        <div id="trip-detail-empty" class="page-empty">
+                            <i class="fas fa-route"></i>
+                            <p>Select a trip to see its route</p>
+                        </div>
+                        <div id="trip-detail-body" class="trip-detail-body hidden">
+                            <div id="trip-map"></div>
+                            <div class="trip-stats-grid" id="trip-stats"></div>
+                            <div class="trip-chart-card">
+                                <div class="trip-metric-row">
+                                    <button class="trip-metric-btn active" onclick="selectTripMetric(this,'speed')">Speed</button>
+                                    <button class="trip-metric-btn" onclick="selectTripMetric(this,'alt')">Altitude</button>
+                                    <button class="trip-metric-btn" onclick="selectTripMetric(this,'rpm')">RPM</button>
+                                    <button class="trip-metric-btn" onclick="selectTripMetric(this,'coolant')">Coolant</button>
+                                    <button class="trip-metric-btn" onclick="selectTripMetric(this,'load')">Load</button>
+                                </div>
+                                <canvas id="trip-metric-chart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 1: OBD Dashboard -->
+            <div class="page" data-page="1">
+                <div class="page-content obd-dashboard">
+                    <div class="gauge-grid">
+                        <div class="gauge-card" onclick="openObdChart('rpm')">
+                            <canvas id="gauge-rpm" width="170" height="170"></canvas>
+                            <div class="gauge-label">RPM</div>
+                            <div class="gauge-value" id="obd-rpm">0</div>
+                        </div>
+                        <div class="gauge-card" onclick="openObdChart('speed')">
+                            <canvas id="gauge-speed" width="170" height="170"></canvas>
+                            <div class="gauge-label">Speed</div>
+                            <div class="gauge-value" id="obd-speed">0 <small>km/h</small></div>
+                        </div>
+                        <div class="gauge-card" onclick="openObdChart('coolant')">
+                            <canvas id="gauge-coolant" width="170" height="170"></canvas>
+                            <div class="gauge-label">Coolant</div>
+                            <div class="gauge-value" id="obd-coolant">0°C</div>
+                        </div>
+                        <div class="gauge-card" onclick="openObdChart('battery')">
+                            <canvas id="gauge-battery" width="170" height="170"></canvas>
+                            <div class="gauge-label">Battery</div>
+                            <div class="gauge-value" id="obd-battery">0V</div>
+                        </div>
+                    </div>
+                    <!-- Health: rendered by renderObdHealth() from obd.health and the
+                         health metrics (fuel system, boost, tyres). Shown in place of the
+                         gauges by the Gauges / Health switch. -->
+                    <div id="obd-health" class="obd-health hidden">
+                        <div id="obd-health-alert" class="obd-health-alert hidden"></div>
+                        <div class="obd-health-grid">
+                            <div class="health-card">
+                                <div class="health-title">Engine</div>
+                                <div class="health-row"><span>Fuel control</span><strong id="hl-fuel-loop">—</strong></div>
+                                <div class="health-sub">Boost <small id="hl-boost-ctl"></small></div>
+                                <div id="hl-boost" class="health-bars"></div>
+                                <div class="health-sub">Misfires <small id="hl-misfire-at"></small></div>
+                                <div id="hl-misfire" class="health-misfire"></div>
+                            </div>
+                            <div class="health-card">
+                                <div class="health-title">Emission monitors</div>
+                                <div class="health-sub">This drive <small id="hl-mon-count"></small></div>
+                                <div id="hl-monitors" class="health-chips"></div>
+                                <div class="health-sub">Completion rate <small id="hl-ipt-ign"></small></div>
+                                <div id="hl-ipt" class="health-bars"></div>
+                            </div>
+                            <div id="hl-tyres-card" class="health-card hidden">
+                                <div class="health-title">Tyres <small>bar</small></div>
+                                <div id="hl-tyres" class="health-tyres"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="obd-sidebar">
+                        <div id="obd-status" class="obd-status disconnected">
+                            <i class="fab fa-bluetooth-b"></i> <span>Disconnected</span>
+                            <!-- The car's own name, from its CarPlay head unit (/api/headunit). -->
+                            <small id="obd-car-name" class="obd-car-name"></small>
+                        </div>
+                        <div class="media-tabs obd-view-tabs">
+                            <button class="media-tab active" data-view="gauges" onclick="setObdView('gauges')"><i class="fas fa-gauge-high"></i>Gauges</button>
+                            <button class="media-tab" data-view="health" onclick="setObdView('health')"><i class="fas fa-heart-pulse"></i>Health</button>
+                        </div>
+                        <!-- Rows are rendered by renderObdMetrics() from obd.metrics: one per
+                             value the car supports. Every row opens its history chart. -->
+                        <div id="obd-metrics" class="obd-metrics scrollable"></div>
+                        <button id="obd-dtc" class="obd-dtc hidden" onclick="openDtcModal()">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <span id="obd-dtc-count">0 DTCs</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 2: Home — the house, through the optional home server
+                 (app/src/services/home_server.rs, /api/home/*). Off unless
+                 ~/.config/rascar/home-server.json exists: home.js then marks this
+                 page .page-disabled (skipped by swipes) and hides its Apps tile. -->
+            <div class="page page-disabled" data-page="2">
+                <div class="page-content home-page">
+                    <div class="panel-left">
+                        <!-- Drill-down: levels → rooms → the room's controls. -->
+                        <div class="cd-head">
+                            <button id="home-back" class="cd-back hidden" onclick="RasCar.home.back()" aria-label="Back"><i class="fas fa-chevron-left"></i></button>
+                            <div class="cd-title"><div id="home-crumb-sub" class="cd-sub">The house</div><div id="home-crumb" class="cd-name">Levels</div></div>
+                        </div>
+                        <div id="home-rooms" class="card scrollable home-rooms"></div>
+                    </div>
+                    <div class="panel-right">
+                        <div class="home-entry">
+                            <div id="home-door" class="app-tile" onclick="RasCar.home.tapDoor(this)"><i class="fas fa-door-closed"></i><span>Front door</span><small class="muted">Tap twice to open</small></div>
+                            <div id="home-garage" class="app-tile" onclick="RasCar.home.tapGarage(this)"><i class="fas fa-warehouse"></i><span>Garage</span><small class="muted">--</small></div>
+                        </div>
+                        <div class="media-tabs">
+                            <button class="media-tab" onclick="RasCar.home.garage('stop')"><i class="fas fa-stop"></i> Stop garage</button>
+                            <button id="home-garage-light" class="media-tab" onclick="RasCar.home.garageLight()"><i class="fas fa-lightbulb"></i> Garage light</button>
+                        </div>
+                        <small id="home-link" class="muted">Connecting to the house…</small>
+                    </div>
+                    <div id="home-empty" class="page-empty hidden">
+                        <i class="fas fa-house-signal"></i>
+                        <p id="home-empty-msg">No home server configured on this car</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 3: Navigation. Full Google Maps / Waze in a frame: the car browser's
+                 frame-unlock extension lifts their anti-framing headers, the backend
+                 feeds them the car's GPS and types the on-screen keyboard into them. -->
+            <div class="page" data-page="3">
+                <div class="page-content nav-page">
+                    <iframe id="nav-map-frame" class="nav-map" title="Map" allow="geolocation; fullscreen"></iframe>
+                    <!-- Offline: our own MapLibre map on local vector tiles (js/navmap.js). -->
+                    <div id="nav-offline-map" class="nav-map hidden"></div>
+                    <!-- Offline guidance: next maneuver (top) and destination search (js/navmap.js). -->
+                    <div id="navmap-banner" class="nav-event-card navmap-banner hidden"><i id="navmap-banner-icon" class="fas fa-arrow-up"></i><span><strong id="navmap-banner-text"></strong><small id="navmap-banner-dist"></small></span></div>
+                    <div id="navmap-search" class="navmap-search hidden">
+                        <div class="ytm-query-row">
+                            <i class="fas fa-location-dot"></i>
+                            <span id="navmap-query" class="ytm-query" aria-label="Destination"></span>
+                            <button class="ytm-clear" onclick="RasCar.navmap.closeSearch()" aria-label="Close search"><i class="fas fa-xmark"></i></button>
+                        </div>
+                        <div id="navmap-results" class="ytm-results scrollable"></div>
+                    </div>
+                    <div id="navmap-osk" class="osk nav-osk hidden" aria-label="Keyboard"></div>
+                    <div id="navmap-limit" class="navmap-limit hidden" aria-label="Speed limit"><span id="navmap-limit-value" class="gauge-value"></span></div>
+                    <div class="nav-panel">
+                        <div class="media-tabs nav-source">
+                            <button class="media-tab active" data-source="google" onclick="setNavSource('google')"><i class="fas fa-map-marked-alt"></i>Google Maps</button>
+                            <button class="media-tab" data-source="waze" onclick="setNavSource('waze')"><i class="fab fa-waze"></i>Waze</button>
+                            <button class="media-tab" data-source="offline" onclick="setNavSource('offline')"><i class="fas fa-route"></i>Offline</button>
+                        </div>
+                        <button id="nav-recenter" class="nav-kbd-btn hidden" onclick="RasCar.navmap.recenter()" aria-label="Follow the car"><i class="fas fa-location-arrow"></i></button>
+                        <button id="navmap-search-btn" class="nav-kbd-btn nav-offline-only hidden" onclick="RasCar.navmap.openSearch()" aria-label="Destination"><i class="fas fa-magnifying-glass"></i></button>
+                        <button id="navmap-favourites-btn" class="nav-kbd-btn" onclick="RasCar.navmap.openFavourites()" aria-label="Favourite destinations"><i class="fas fa-star"></i></button>
+                        <button id="navmap-voice-btn" class="nav-kbd-btn hidden" onclick="RasCar.navmap.toggleVoice()" aria-label="Voice guidance"><i class="fas fa-volume-high"></i></button>
+                        <button id="navmap-route-card" class="nav-event-card hidden" onclick="RasCar.navmap.cancelRoute()" aria-label="Stop the route"><i class="fas fa-flag-checkered"></i><span><span id="navmap-route-arrival" class="gauge-value"></span><small id="navmap-route-eta"></small></span><i class="fas fa-xmark"></i></button>
+                        <button class="nav-kbd-btn nav-web-only" onclick="toggleNavKeyboard()" aria-label="Keyboard"><i class="fas fa-keyboard"></i></button>
+                        <button class="nav-kbd-btn nav-web-only" onclick="signInNavMap()" aria-label="Sign in"><i class="fas fa-right-to-bracket"></i></button>
+                        <button id="nav-next-event" class="nav-event-card hidden" onclick="routeToNextEvent()"></button>
+                    </div>
+                    <div id="nav-osk" class="osk nav-osk hidden"></div>
+                </div>
+            </div>
+
+            <!-- Page 4: Media (HOME) -->
+            <div class="page" data-page="4">
+                <div class="page-content media-page">
+                    <!-- Home: media player + glance cards (the Music/Events/Stats tabs were removed; Calendar and Vehicle have their own screens) -->
+                    <div id="media-tab-music" class="media-tab-content">
+                        <div class="panel-left">
+                            <div class="media-player">
+                                <div id="media-art" class="media-art" onclick="if(RasCar.media)RasCar.media.enterFullscreen()"><i class="fas fa-music"></i></div>
+                                <div class="media-info">
+                                    <div id="media-title" class="media-title">No media playing</div>
+                                    <div id="media-artist" class="media-artist"></div>
+                                </div>
+                                <div class="media-controls">
+                                    <button class="media-rate dislike hidden" onclick="RasCar.media.dislike()" aria-label="Dislike and skip"><i class="fas fa-thumbs-down"></i></button>
+                                    <button onclick="mediaCmd('previous')"><i class="fas fa-backward"></i></button>
+                                    <button id="media-play-btn" onclick="mediaCmd('play-pause')" class="play-btn">
+                                        <i class="fas fa-play"></i>
+                                    </button>
+                                    <button onclick="mediaCmd('next')"><i class="fas fa-forward"></i></button>
+                                    <button class="media-rate like hidden" onclick="RasCar.media.like()" aria-label="Like"><i class="fas fa-thumbs-up"></i></button>
+                                </div>
+                                <div id="media-progress" class="media-progress"><div id="media-progress-bar" class="progress-bar"></div></div>
+                                <!-- Trip cost + fuel wallet (the volume slider that was here had no
+                                     effect: the car's own volume knob sets the level). -->
+                                <button id="home-fuel" class="home-fuel" onclick="goToPage(0)" aria-label="Open the trips">
+                                    <span class="hf-cell"><i class="fas fa-route"></i><span><strong id="hf-trip-cost">--</strong><small id="hf-trip-detail">No trip</small></span></span>
+                                    <span class="hf-cell"><i class="fas fa-gas-pump"></i><span><strong id="hf-balance">--</strong><small id="hf-level">Range</small></span></span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="panel-right">
+                            <!-- Glance row: speed + outside temperature, and the next event. -->
+                            <div class="home-glance">
+                                <div class="home-drive">
+                                    <button class="home-speed" onclick="goToPage(1)" aria-label="Open the car panel"><span id="home-speed">0</span><small id="home-speed-unit">km/h</small></button>
+                                    <button class="home-temp" onclick="goToPage(11)" aria-label="Open the weather"><span id="home-temp">--°C</span><small>Outside</small></button>
+                                </div>
+                                <button id="next-event-mini" class="next-event-mini" onclick="goToPage(5)" aria-label="Open the calendar"><span class="muted">No events today</span></button>
+                            </div>
+                            <canvas id="visualizer-canvas" width="460" height="100" class="visualizer-canvas" onclick="if(RasCar.media)RasCar.media.enterFullscreen()"></canvas>
+                            <button class="quick-call phone-launch" onclick="openDialer()" aria-label="Open the phone">
+                                <i class="fas fa-phone"></i><span>Phone</span><small class="muted">Keypad · Contacts · Recent</small>
+                            </button>
+                            <!-- Nav / Calendar / Vehicle / Apps shortcuts removed: the dock
+                                 carries those destinations permanently. -->
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Page 5: Calendar -->
+            <div class="page" data-page="5">
+                <div class="page-content calendar-page">
+                    <div class="cal-toolbar">
+                    <div class="cal-header">
+                        <button onclick="calPrevDay()" aria-label="Previous"><i class="fas fa-chevron-left"></i></button>
+                        <span id="cal-date" class="date-pick" onclick="openCalDatePicker()" role="button" aria-label="Pick a day">Today</span>
+                        <button onclick="calNextDay()" aria-label="Next"><i class="fas fa-chevron-right"></i></button>
+                        <button id="cal-today-btn" onclick="calToday()" class="hidden">Today</button>
+                    </div>
+                        <div class="media-tabs cal-views">
+                            <button class="media-tab active" data-view="day" onclick="setCalView('day')">Day</button>
+                            <button class="media-tab" data-view="week" onclick="setCalView('week')">Week</button>
+                            <button class="media-tab" data-view="month" onclick="setCalView('month')">Month</button>
+                        </div>
+                    </div>
+                    <!-- One chip per agenda: its colour, tap to hide/show it (saved in settings). -->
+                    <div id="cal-legend" class="media-tabs cal-legend"></div>
+                    <div id="cal-events" class="cal-events scrollable"></div>
+                </div>
+            </div>
+
+            <!-- Page 6: All Apps -->
+            <div class="page" data-page="6">
+                <div class="page-content apps-page">
+                    <h2><i class="fas fa-th"></i> Applications</h2>
+                    <div id="apps-grid" class="apps-grid">
+                        <div class="app-tile" onclick="goToPage(4)"><i class="fas fa-music"></i><span>Media</span></div>
+                        <div class="app-tile" onclick="goToPage(12)"><i class="fas fa-headphones"></i><span>YouTube Music</span></div>
+                        <div class="app-tile" data-app="youtube" onclick="openApp('youtube')"><i class="fab fa-youtube"></i><span>YouTube</span></div>
+                        <div class="app-tile" data-app="netflix" onclick="openApp('netflix')"><i class="fas fa-film"></i><span>Netflix</span></div>
+                        <div class="app-tile" data-app="disney" onclick="openApp('disney')"><i class="fas fa-wand-magic-sparkles"></i><span>Disney+</span></div>
+                        <div class="app-tile" data-app="freetv" onclick="openApp('freetv')"><i class="fas fa-display"></i><span>Free TV</span></div>
+                        <div class="app-tile" data-app="androidauto" onclick="openApp('androidauto')"><i class="fab fa-android"></i><span>Android Auto</span></div>
+                        <div class="app-tile" onclick="goToPage(7)"><i class="fas fa-tv"></i><span>TV</span></div>
+                        <div class="app-tile" onclick="goToPage(8)"><i class="fas fa-broadcast-tower"></i><span>Radio</span></div>
+                        <div class="app-tile" onclick="goToPage(3)"><i class="fas fa-location-arrow"></i><span>Navigation</span></div>
+                        <div class="app-tile" onclick="goToPage(5)"><i class="fas fa-calendar"></i><span>Calendar</span></div>
+                        <div class="app-tile" onclick="goToPage(11)"><i class="fas fa-cloud-sun"></i><span>Weather</span></div>
+                        <div id="home-app-tile" class="app-tile hidden" onclick="goToPage(2)"><i class="fas fa-house-signal"></i><span>Home</span></div>
+                        <div class="app-tile" onclick="goToPage(9)"><i class="fab fa-bitcoin"></i><span>Crypto</span></div>
+                        <div class="app-tile" onclick="goToPage(10)"><i class="fas fa-satellite-dish"></i><span>GPS Info</span></div>
+                        <div class="app-tile" onclick="goToPage(1)"><i class="fas fa-car"></i><span>OBD-II</span></div>
+                        <div class="app-tile" onclick="goToPage(0)"><i class="fas fa-route"></i><span>Trips</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 7: TV Streaming -->
+            <div class="page" data-page="7">
+                <div class="page-content tv-page">
+                    <!-- Full page width: 8 country chips fit one 44px row here,
+                         where in the 260px list column they wrapped to three. -->
+                    <div class="media-tabs country-bar" id="tv-country-tabs"></div>
+                    <div class="split-row">
+                    <div class="tv-list-col">
+                        <div id="tv-channel-list" class="tv-channel-list scrollable"></div>
+                    </div>
+                    <div id="tv-player-area" class="tv-player-area">
+                        <video id="tv-player" autoplay playsinline></video>
+                        <div id="tv-now-playing" class="tv-now-playing"></div>
+                        <!-- Stop: same round control as the PiP window's close, shown only while a channel plays. -->
+                        <button id="tv-stop" class="tv-pip-close hidden" onclick="tvPipClose(event)" aria-label="Stop TV"><i class="fas fa-stop"></i></button>
+                    </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 8: Radio -->
+            <div class="page" data-page="8">
+                <div class="page-content radio-page">
+                    <!-- Country filter, built from the data so a new country in
+                         radio-stations.json appears without a code change. -->
+                    <div class="media-tabs country-bar" id="radio-country-tabs"></div>
+                    <div class="split-row">
+                    <div class="radio-list-col">
+                        <div class="radio-station-list scrollable" id="radio-station-list"></div>
+                    </div>
+                    <div class="radio-display">
+                        <i class="fas fa-broadcast-tower radio-icon"></i>
+                        <div id="radio-station-name" class="radio-freq">Select a station</div>
+                        <div class="radio-controls">
+                            <button onclick="radioPrev()"><i class="fas fa-backward"></i></button>
+                            <button onclick="radioPlayPause()" id="radio-play-btn"><i class="fas fa-play"></i></button>
+                            <button onclick="radioNext()"><i class="fas fa-forward"></i></button>
+                        </div>
+                        <audio id="radio-player"></audio>
+                    </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 9: Crypto -->
+            <div class="page" data-page="9">
+                <div class="page-content crypto-page">
+                    <!-- List: one card per coin (price, 24h, 7-day sparkline); tap for details. -->
+                    <div id="crypto-list" class="crypto-list">
+                        <div class="crypto-grid">
+                        <button class="crypto-card" id="crypto-card-btc" onclick="openCryptoDetail('btc')">
+                            <div class="crypto-card-head">
+                                <span class="coin-badge coin-btc"><i class="fab fa-bitcoin"></i></span>
+                                <span class="crypto-card-name">Bitcoin</span>
+                                <span class="crypto-card-change" id="btc-24h">--</span>
+                            </div>
+                            <div class="crypto-price" id="btc-price">--</div>
+                            <canvas class="crypto-spark" id="btc-spark" width="400" height="56"></canvas>
+                        </button>
+                        <button class="crypto-card" id="crypto-card-eth" onclick="openCryptoDetail('eth')">
+                            <div class="crypto-card-head">
+                                <span class="coin-badge coin-eth"><i class="fab fa-ethereum"></i></span>
+                                <span class="crypto-card-name">Ethereum</span>
+                                <span class="crypto-card-change" id="eth-24h">--</span>
+                            </div>
+                            <div class="crypto-price" id="eth-price">--</div>
+                            <canvas class="crypto-spark" id="eth-spark" width="400" height="56"></canvas>
+                        </button>
+                        <button class="crypto-card" id="crypto-card-zec" onclick="openCryptoDetail('zec')">
+                            <div class="crypto-card-head">
+                                <span class="coin-badge coin-zec">Z</span>
+                                <span class="crypto-card-name">Zcash</span>
+                                <span class="crypto-card-change" id="zec-24h">--</span>
+                            </div>
+                            <div class="crypto-price" id="zec-price">--</div>
+                            <canvas class="crypto-spark" id="zec-spark" width="400" height="56"></canvas>
+                        </button>
+                        <button class="crypto-card" id="crypto-card-flux" onclick="openCryptoDetail('flux')">
+                            <div class="crypto-card-head">
+                                <span class="coin-badge coin-flux">F</span>
+                                <span class="crypto-card-name">Flux</span>
+                                <span class="crypto-card-change" id="flux-24h">--</span>
+                            </div>
+                            <div class="crypto-price" id="flux-price">--</div>
+                            <canvas class="crypto-spark" id="flux-spark" width="400" height="56"></canvas>
+                        </button>
+                        </div>
+                        <div class="crypto-fng">
+                            <span>Fear &amp; Greed</span>
+                            <span id="crypto-fng-value" class="fng-value">--</span>
+                        </div>
+                    </div>
+
+                    <!-- Detail: price, range chart and market stats for one coin. -->
+                    <div id="crypto-detail" class="crypto-detail hidden">
+                        <div class="cd-main">
+                            <div class="cd-head">
+                                <button class="cd-back" onclick="closeCryptoDetail()" aria-label="Back to all coins"><i class="fas fa-chevron-left"></i></button>
+                                <span id="cd-badge" class="coin-badge"></span>
+                                <div class="cd-title">
+                                    <div id="cd-name" class="cd-name">--</div>
+                                    <div id="cd-rank" class="cd-sub">--</div>
+                                </div>
+                                <div class="cd-price-block">
+                                    <div id="cd-price" class="cd-price">--</div>
+                                    <div id="cd-change" class="cd-change">--</div>
+                                </div>
+                            </div>
+                            <div class="media-tabs cd-ranges">
+                                <button class="media-tab" data-days="1" onclick="setCryptoRange(1)">24H</button>
+                                <button class="media-tab active" data-days="7" onclick="setCryptoRange(7)">7D</button>
+                                <button class="media-tab" data-days="30" onclick="setCryptoRange(30)">30D</button>
+                                <button class="media-tab" data-days="365" onclick="setCryptoRange(365)">1Y</button>
+                            </div>
+                            <div class="cd-chart-wrap">
+                                <canvas id="cd-chart" width="720" height="240"></canvas>
+                                <div id="cd-chart-msg" class="cd-chart-msg hidden"></div>
+                            </div>
+                        </div>
+                        <div class="cd-stats">
+                            <div class="cd-chips">
+                                <div class="cd-chip"><span>1h</span><strong id="cd-c1h">--</strong></div>
+                                <div class="cd-chip"><span>24h</span><strong id="cd-c24h">--</strong></div>
+                                <div class="cd-chip"><span>7d</span><strong id="cd-c7d">--</strong></div>
+                                <div class="cd-chip"><span>30d</span><strong id="cd-c30d">--</strong></div>
+                            </div>
+                            <div class="metric-row"><span>Market cap</span><span id="cd-mcap">--</span></div>
+                            <div class="metric-row"><span>Volume 24h</span><span id="cd-vol">--</span></div>
+                            <div class="metric-row"><span>24h range</span><span id="cd-range">--</span></div>
+                            <div class="metric-row"><span>All-time high</span><span id="cd-ath">--</span></div>
+                            <div class="metric-row"><span>From ATH</span><span id="cd-athchg">--</span></div>
+                            <div class="metric-row"><span>Supply</span><span id="cd-supply">--</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 10: GPS System Info -->
+            <div class="page" data-page="10">
+                <div class="page-content gps-page">
+                    <div class="panel-left">
+                        <div class="gps-big-speed" id="gps-speed">0</div>
+                        <div class="gps-speed-unit" id="gps-speed-unit">km/h</div>
+                        <div class="gps-info-grid">
+                            <div><i class="fas fa-mountain"></i> <span id="gps-alt">0 m</span></div>
+                            <div><i class="fas fa-compass"></i> <span id="gps-bearing">N 0°</span></div>
+                            <div><i class="fas fa-crosshairs"></i> <span id="gps-coords">--, --</span></div>
+                            <div><i class="fas fa-bullseye"></i> <span id="gps-accuracy">-- m</span></div>
+                        </div>
+                        <!-- Satellites from the car's $GPGSV: one SNR bar per satellite in
+                             view. Hidden until the car sends a complete GSV cycle. -->
+                        <div id="gps-sky" class="gps-sky hidden">
+                            <div class="gps-sky-head"><span><i class="fas fa-satellite"></i> Satellites</span><small id="gps-sats">--</small></div>
+                            <div id="gps-snr" class="gps-snr"></div>
+                        </div>
+                        <!-- Provenance of the position: fabricated data must never
+                             be indistinguishable from a real fix. -->
+                        <div id="gps-source" class="gps-source-badge hidden"></div>
+                    </div>
+                    <div class="panel-right">
+                        <div class="chart-container">
+                            <div class="chart-label">Speed</div>
+                            <canvas id="chart-speed" width="380" height="180"></canvas>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-label">Altitude</div>
+                            <canvas id="chart-altitude" width="380" height="180"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 11: Weather (opened from the home temperature and the status row) -->
+            <div class="page" data-page="11">
+                <div class="page-content weather-page">
+                    <div class="wx-now">
+                        <i id="wx-icon" class="fas fa-cloud wx-icon"></i>
+                        <div class="wx-temp" id="wx-temp">--°</div>
+                        <div class="wx-cond" id="wx-cond">--</div>
+                        <div class="wx-facts">
+                            <div><span>Feels like</span><strong id="wx-feels">--</strong></div>
+                            <div><span>Humidity</span><strong id="wx-hum">--</strong></div>
+                            <div><span>Wind</span><strong id="wx-wind">--</strong></div>
+                            <div><span>Sun</span><strong id="wx-sun">--</strong></div>
+                        </div>
+                    </div>
+                    <div class="wx-side">
+                        <div class="wx-hourly" id="wx-hourly"></div>
+                        <div class="wx-daily" id="wx-daily"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page 12: YouTube Music (built-in player; plays through mpv on the Pi).
+                 Home = your playlists, recently played and the YouTube Music home feed;
+                 tapping the search field opens the on-screen keyboard. -->
+            <div class="page" data-page="12">
+                <div class="page-content ytm-page">
+                    <div class="ytm-results-col">
+                        <div class="ytm-query-row">
+                            <i class="fas fa-headphones"></i>
+                            <span id="ytm-query" class="ytm-query" onclick="ytmOpenSearch()" role="button" aria-label="Search"></span>
+                            <button id="ytm-close-search" class="ytm-clear hidden" onclick="ytmCloseSearch()" aria-label="Back to YouTube Music home"><i class="fas fa-xmark"></i></button>
+                            <button id="ytm-account" class="ytm-clear" onclick="ytmAccount()" aria-label="YouTube Music account"><i class="fas fa-user"></i></button>
+                            <button class="ytm-clear" onclick="if(RasCar.media)RasCar.media.enterFullscreen()" aria-label="Now playing"><i class="fas fa-compact-disc"></i></button>
+                        </div>
+                        <div id="ytm-home" class="ytm-results ytm-home scrollable"></div>
+                        <div id="ytm-results" class="ytm-results scrollable hidden"></div>
+                    </div>
+                    <div id="ytm-osk" class="osk hidden" aria-label="Keyboard"></div>
+                </div>
+            </div>
+
+            <!-- Page 13: embedded app (streaming / meeting). The frames themselves live
+                 in #app-layer outside the sliding pages; this page is the slot they
+                 fill when shown full size. -->
+            <div class="page" data-page="13">
+                <div class="page-content app-page">
+                    <div class="page-empty">
+                        <i class="fas fa-clapperboard"></i>
+                        <p>No app open</p>
+                        <button class="btn-primary" onclick="goToPage(6)">Open Apps</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Orientation cue: which of the 11 screens am I on, and which way is
+             the next one. Overlaid so it costs no vertical space. -->
+        <div id="page-indicator" class="page-indicator" aria-hidden="true"></div>
+    </div>
+    </div><!-- /#app-main -->
+
+    <!-- TV picture-in-picture: while a channel plays and another screen is shown,
+         the same <video> element is moved here so playback never restarts.
+         Tap = back to TV, drag = move, x = stop (as in AndroidAuto2's TvPipOverlay). -->
+    <!-- Embedded apps: fixed layer that never moves in the DOM (re-parenting an
+         iframe reloads it). Full size over page 13, or a PiP window on other pages. -->
+    <div id="app-layer" class="app-layer hidden" aria-label="Embedded app">
+        <div id="app-frames" class="app-frames"></div>
+        <div class="app-controls">
+            <button class="nav-kbd-btn app-kbd-btn" onclick="toggleAppKeyboard()" aria-label="Keyboard"><i class="fas fa-keyboard"></i></button>
+            <button class="nav-kbd-btn" onclick="signInEmbeddedApp()" aria-label="Sign in"><i class="fas fa-right-to-bracket"></i></button>
+            <button class="nav-kbd-btn" onclick="closeEmbeddedApp()" aria-label="Close app"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div id="app-osk" class="osk nav-osk hidden"></div>
+        <!-- PiP only: catches the tap (expand) and the drag (snap to a corner). -->
+        <div class="app-pip-hit"><span id="app-pip-name" class="tv-pip-name"></span></div>
+        <button class="tv-pip-close app-pip-close" onclick="closeEmbeddedApp(event)" aria-label="Close app"><i class="fas fa-xmark"></i></button>
+    </div>
+
+    <!-- Touch glow: the car's video has no cursor, so touches (echoed by the
+         CarPlay injector, including those on embedded sites) are drawn here. -->
+    <div id="touch-layer" class="touch-layer" aria-hidden="true"></div>
+
+    <div id="tv-pip" class="tv-pip hidden" aria-label="TV picture-in-picture">
+        <div id="tv-pip-slot" class="tv-pip-slot"></div>
+        <span id="tv-pip-name" class="tv-pip-name"></span>
+        <button class="tv-pip-close" onclick="tvPipClose(event)" aria-label="Stop TV"><i class="fas fa-xmark"></i></button>
+    </div>
+
+
+    <!-- Nav Popup -->
+    <div id="nav-popup" class="nav-popup hidden" onclick="closeNavPopup(event)">
+        <div class="nav-popup-content">
+            <div class="nav-popup-grid">
+                <div class="nav-popup-tile" onclick="navPopupGo(4)"><i class="fas fa-music"></i><span>Media</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(3)"><i class="fas fa-location-arrow"></i><span>Nav</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(5)"><i class="fas fa-calendar"></i><span>Calendar</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(1)"><i class="fas fa-car"></i><span>OBD-II</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(10)"><i class="fas fa-satellite-dish"></i><span>GPS</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(0)"><i class="fas fa-route"></i><span>Trips</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(7)"><i class="fas fa-tv"></i><span>TV</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(8)"><i class="fas fa-broadcast-tower"></i><span>Radio</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(9)"><i class="fab fa-bitcoin"></i><span>Crypto</span></div>
+                <div id="home-nav-tile" class="nav-popup-tile hidden" onclick="navPopupGo(2)"><i class="fas fa-house-signal"></i><span>Home</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(11)"><i class="fas fa-cloud-sun"></i><span>Weather</span></div>
+                <div class="nav-popup-tile" onclick="navPopupGo(6)"><i class="fas fa-th"></i><span>Apps</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OBD Chart Overlay -->
+    <div id="obd-chart-overlay" class="overlay hidden">
+        <div class="overlay-content obd-chart-content">
+            <div class="obd-chart-header">
+                <span id="obd-chart-title">Chart</span>
+                <button onclick="closeObdChart()" class="btn-close btn-close-compact">✕</button>
+            </div>
+            <canvas id="obd-chart-canvas" width="480" height="220"></canvas>
+            <div class="obd-chart-stats">
+                <div><span>Min</span><span id="obd-chart-min">—</span></div>
+                <div><span>Avg</span><span id="obd-chart-avg">—</span></div>
+                <div><span>Max</span><span id="obd-chart-max">—</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DTC Modal -->
+    <div id="dtc-overlay" class="overlay hidden">
+        <div class="overlay-content dtc-content">
+            <div class="obd-chart-header">
+                <span>Fault Codes</span>
+                <button onclick="closeDtcModal()" class="btn-close btn-close-compact">✕</button>
+            </div>
+            <div id="dtc-list" class="scrollable"></div>
+            <button onclick="clearDtcs()" class="btn-danger btn-danger-block">
+                <i class="fas fa-trash"></i> Clear All Codes
+            </button>
+        </div>
+    </div>
+
+    <!-- Phone dialer: keypad on the left, contacts / recent calls on the right. -->
+    <div id="dialer-overlay" class="overlay hidden">
+        <div class="overlay-content dialer">
+            <div class="dialer-pad">
+                <div class="dialer-display">
+                    <span id="dialer-name" class="dialer-name muted"></span>
+                    <div class="dialer-number-row">
+                        <span id="dialer-number" class="dialer-number"></span>
+                        <button class="dialer-back" onclick="dialerBackspace()" aria-label="Delete"><i class="fas fa-delete-left"></i></button>
+                    </div>
+                </div>
+                <div class="dialer-keys"><button onclick="dialerKey('1')">1</button><button onclick="dialerKey('2')">2</button><button onclick="dialerKey('3')">3</button><button onclick="dialerKey('4')">4</button><button onclick="dialerKey('5')">5</button><button onclick="dialerKey('6')">6</button><button onclick="dialerKey('7')">7</button><button onclick="dialerKey('8')">8</button><button onclick="dialerKey('9')">9</button><button onclick="dialerKey('*')">*</button><button onclick="dialerKey('0')">0</button><button onclick="dialerKey('#')">#</button></div>
+                <button id="dialer-call" class="dialer-call" onclick="dialerCall()" disabled><i class="fas fa-phone"></i> Call</button>
+            </div>
+            <div class="dialer-side">
+                <div class="obd-chart-header">
+                    <div class="media-tabs">
+                        <button class="media-tab active" data-tab="contacts" onclick="dialerTab('contacts')"><i class="fas fa-address-book"></i>Contacts</button>
+                        <button class="media-tab" data-tab="recent" onclick="dialerTab('recent')"><i class="fas fa-clock-rotate-left"></i>Recent</button>
+                    </div>
+                    <button onclick="closeDialer()" class="btn-close btn-close-compact" aria-label="Close">✕</button>
+                </div>
+                <div id="dialer-list" class="dialer-list scrollable"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phone call through the 4G modem (js/phone.js, css/phone.css): incoming call,
+         in-call screen with keypad, minimised status pill. Above every other layer. -->
+    <div id="phone-overlay" class="overlay phone-overlay hidden" role="dialog" aria-live="assertive" aria-label="Phone call">
+        <div class="overlay-content phone-card">
+            <div class="phone-main">
+                <div class="phone-who">
+                    <div id="phone-avatar" class="phone-avatar"></div>
+                    <div class="phone-who-text">
+                        <span id="phone-state" class="phone-state"></span>
+                        <strong id="phone-name" class="phone-name"></strong>
+                        <span id="phone-number" class="phone-number muted"></span>
+                        <span id="phone-timer" class="phone-timer"></span>
+                    </div>
+                </div>
+                <div id="phone-incoming-actions" class="phone-actions">
+                    <button class="phone-btn phone-decline" onclick="RasCar.phone.hangup()"><i class="fas fa-phone-slash"></i><span>Decline</span></button>
+                    <button class="phone-btn phone-answer" onclick="RasCar.phone.answer()"><i class="fas fa-phone"></i><span>Answer</span></button>
+                </div>
+                <div id="phone-call-actions" class="phone-actions hidden">
+                    <button id="phone-mute" class="phone-btn phone-tool" onclick="RasCar.phone.toggleMute()"><i class="fas fa-microphone"></i><span>Mute</span></button>
+                    <button id="phone-keypad-btn" class="phone-btn phone-tool" onclick="RasCar.phone.toggleKeypad()"><i class="fas fa-table-cells"></i><span>Keypad</span></button>
+                    <button class="phone-btn phone-hangup" onclick="RasCar.phone.hangup()"><i class="fas fa-phone-slash"></i><span>Hang up</span></button>
+                </div>
+            </div>
+            <div id="phone-keypad" class="phone-keypad hidden">
+                <div id="phone-dtmf" class="phone-dtmf"></div>
+                <div class="phone-keys"><button onclick="RasCar.phone.dtmf('1')">1</button><button onclick="RasCar.phone.dtmf('2')">2</button><button onclick="RasCar.phone.dtmf('3')">3</button><button onclick="RasCar.phone.dtmf('4')">4</button><button onclick="RasCar.phone.dtmf('5')">5</button><button onclick="RasCar.phone.dtmf('6')">6</button><button onclick="RasCar.phone.dtmf('7')">7</button><button onclick="RasCar.phone.dtmf('8')">8</button><button onclick="RasCar.phone.dtmf('9')">9</button><button onclick="RasCar.phone.dtmf('*')">*</button><button onclick="RasCar.phone.dtmf('0')">0</button><button onclick="RasCar.phone.dtmf('#')">#</button></div>
+            </div>
+            <button id="phone-min" class="phone-min" onclick="RasCar.phone.minimise()" aria-label="Minimise the call"><i class="fas fa-chevron-down"></i></button>
+        </div>
+    </div>
+    <button id="phone-pill" class="phone-pill hidden" onclick="RasCar.phone.restore()" aria-label="Back to the call">
+        <span class="phone-pill-icon"><i class="fas fa-phone"></i></span>
+        <span id="phone-pill-name" class="phone-pill-name"></span>
+        <span id="phone-pill-text" class="phone-pill-text"></span>
+    </button>
+
+    <!-- Arriving home (HomeServerService geofence → WS {"type":"arrival"}). -->
+    <div id="arrival-overlay" class="overlay hidden">
+        <div class="overlay-content arrival">
+            <div class="obd-chart-header">
+                <span>Welcome home</span>
+                <button onclick="RasCar.home.closeArrival()" class="btn-close btn-close-compact" aria-label="Close">✕</button>
+            </div>
+            <div class="apps-grid arrival-grid">
+                <div id="arrival-door" class="app-tile" onclick="RasCar.home.arrivalDoor(this)"><i class="fas fa-door-open"></i><span>Open the front door</span><small class="muted"></small></div>
+                <div id="arrival-garage" class="app-tile" onclick="RasCar.home.arrivalGarage(this)"><i class="fas fa-warehouse"></i><span>Open the garage</span><small class="muted"></small></div>
+                <div class="app-tile" onclick="RasCar.home.closeArrival()"><i class="fas fa-xmark"></i><span>Nothing</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- YouTube Music account: Sign in opens Google's page in a car-browser tab
+         (signin.rs); its session is then taken over by the player (ytcookies.rs). -->
+    <div id="ytm-signin-overlay" class="overlay hidden">
+        <div class="overlay-content ytm-signin">
+            <div class="obd-chart-header">
+                <span>YouTube Music account</span>
+                <button onclick="ytmCloseSignIn()" class="btn-close btn-close-compact" aria-label="Close">✕</button>
+            </div>
+            <p id="ytm-signin-status" class="muted"></p>
+            <div class="cal-detail-actions">
+                <button id="ytm-signin-go" class="btn-primary hidden" onclick="ytmStartSignIn()"><i class="fab fa-google"></i> Sign in</button>
+                <button id="ytm-signout" class="btn-danger hidden" onclick="ytmSignOut()"><i class="fas fa-right-from-bracket"></i> Sign out</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Refill: opened by a detected fuel-level rise (WS fuel.pending) or "Add fuel" on Trips. -->
+    <div id="refill-overlay" class="overlay hidden">
+        <div class="overlay-content refill">
+            <div class="obd-chart-header">
+                <span id="refill-title">Fuel added</span>
+                <button onclick="RasCar.fuel.later()" class="btn-close btn-close-compact" aria-label="Later">✕</button>
+            </div>
+            <div class="refill-body">
+                <div class="refill-form">
+                    <small id="refill-detail" class="muted"></small>
+                    <button id="refill-amount" class="refill-field active" onclick="RasCar.fuel.focus('amount')">
+                        <span>Amount paid</span><strong><span id="refill-amount-val">0</span> €</strong>
+                    </button>
+                    <button id="refill-litres" class="refill-field" onclick="RasCar.fuel.focus('litres')">
+                        <span>Litres</span><strong><span id="refill-litres-val">--</span> L</strong>
+                    </button>
+                    <small id="refill-price" class="muted"></small>
+                    <div class="refill-actions">
+                        <button id="refill-dismiss" class="btn-danger" onclick="RasCar.fuel.dismiss()">Not a refill</button>
+                        <button class="btn-close" onclick="RasCar.fuel.later()">Later</button>
+                        <button id="refill-save" class="btn-primary" onclick="RasCar.fuel.save()"><i class="fas fa-check"></i> Save</button>
+                    </div>
+                </div>
+                <div id="refill-pad" class="refill-pad" aria-label="Number pad"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4G panel (js/cell.js, css/cell.css): opened by the status-bar 4G button. -->
+    <div id="cell-overlay" class="overlay hidden">
+        <div class="overlay-content cell-panel">
+            <div class="obd-chart-header">
+                <span>4G data</span>
+                <small id="cell-action" class="muted"></small>
+                <button onclick="RasCar.cell.close()" class="btn-close btn-close-compact" aria-label="Close">✕</button>
+            </div>
+            <div class="cell-body">
+                <div class="cell-col">
+                    <div class="cell-op"><strong id="cell-operator">--</strong><span id="cell-tech"></span></div>
+                    <div class="cell-sig">
+                        <span class="sb-signal" id="cell-bars"><span class="sig-bar"></span><span class="sig-bar"></span><span class="sig-bar"></span><span class="sig-bar"></span><span class="sig-bar"></span></span>
+                        <span id="cell-dbm" class="muted">--</span>
+                    </div>
+                    <div class="cell-kv">
+                        <span>State</span><span id="cell-state">--</span>
+                        <span>IP</span><span id="cell-ip">--</span>
+                        <span>Since</span><span id="cell-since">--</span>
+                    </div>
+                    <div class="cell-usage">
+                        <div class="cell-usage-row"><span class="cell-label">Today</span><strong id="cell-today">--</strong></div>
+                        <div class="cell-usage-row"><span class="cell-label">This cycle</span><strong id="cell-month">--</strong></div>
+                        <div id="cell-meter" class="cell-meter"><div></div></div>
+                        <small id="cell-cycle" class="muted">--</small>
+                        <small id="cell-allow" class="muted">No allowance set</small>
+                    </div>
+                </div>
+                <div class="cell-col">
+                    <div class="cell-chart-head">
+                        <span class="cell-label">Last 30 days</span>
+                        <span class="cell-legend"><span><i class="rx"></i>Download</span><span><i class="tx"></i>Upload</span></span>
+                    </div>
+                    <canvas id="cell-chart" aria-label="Data used per day, last 30 days"></canvas>
+                    <div id="cell-readout" class="cell-readout muted">Tap a bar for the day's figures</div>
+                </div>
+                <div class="cell-col">
+                    <span class="cell-label">Billing cycles</span>
+                    <table class="cell-months"><tbody id="cell-months"></tbody></table>
+                </div>
+            </div>
+            <div class="cell-controls">
+                <button id="cell-power" class="media-tab" onclick="RasCar.cell.power()"><i class="fas fa-power-off"></i><span>4G on</span></button>
+                <button class="btn-primary" onclick="RasCar.cell.reconnect()"><i class="fas fa-rotate"></i> Reconnect</button>
+                <span class="spacer"></span>
+                <div class="stepper">
+                    <button onclick="RasCar.cell.stepAllowance(-1)" aria-label="Lower allowance"><i class="fas fa-minus"></i></button>
+                    <span class="cell-step-val"><small>Allowance</small><b id="cell-allowance">--</b></span>
+                    <button onclick="RasCar.cell.stepAllowance(1)" aria-label="Raise allowance"><i class="fas fa-plus"></i></button>
+                </div>
+                <div class="stepper">
+                    <button onclick="RasCar.cell.stepStartDay(-1)" aria-label="Billing cycle starts earlier"><i class="fas fa-minus"></i></button>
+                    <span class="cell-step-val"><small>Cycle starts</small><b id="cell-startday">--</b></span>
+                    <button onclick="RasCar.cell.stepStartDay(1)" aria-label="Billing cycle starts later"><i class="fas fa-plus"></i></button>
+                </div>
+                <button id="cell-cut" class="media-tab" onclick="RasCar.cell.toggle('cut_at_limit')"><i class="fas fa-ban"></i>Cut at limit</button>
+                <button id="cell-ota" class="media-tab" onclick="RasCar.cell.toggle('ota_over_4g')"><i class="fas fa-download"></i>OTA on 4G</button>
+                <button id="cell-logs" class="media-tab" onclick="RasCar.cell.toggle('logs_over_4g')"><i class="fas fa-upload"></i>Logs on 4G</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Month date picker (Trips and Calendar): each day shows its count; tap = go there. -->
+    <div id="date-picker-overlay" class="overlay hidden">
+        <div class="overlay-content date-picker">
+            <div class="cal-header">
+                <button onclick="datePickerShift(-1)" aria-label="Previous month"><i class="fas fa-chevron-left"></i></button>
+                <span id="dp-title" class="dp-title">--</span>
+                <button onclick="datePickerShift(1)" aria-label="Next month"><i class="fas fa-chevron-right"></i></button>
+                <button onclick="closeDatePicker()" aria-label="Close">✕</button>
+            </div>
+            <div class="dp-grid dp-weekdays"><span class="cd-sub">Mon</span><span class="cd-sub">Tue</span><span class="cd-sub">Wed</span><span class="cd-sub">Thu</span><span class="cd-sub">Fri</span><span class="cd-sub">Sat</span><span class="cd-sub">Sun</span></div>
+            <div id="dp-days" class="dp-grid"></div>
+        </div>
+    </div>
+
+    <!-- Calendar event details -->
+    <div id="cal-detail-overlay" class="overlay hidden">
+        <div class="overlay-content cal-detail">
+            <div class="obd-chart-header">
+                <span id="cal-detail-title"></span>
+                <button onclick="closeCalDetail()" class="btn-close btn-close-compact" aria-label="Close">✕</button>
+            </div>
+            <div class="cal-detail-when"><i class="fas fa-clock"></i><span id="cal-detail-when"></span></div>
+            <div id="cal-detail-loc-row" class="cal-detail-when hidden"><i class="fas fa-map-marker-alt"></i><span id="cal-detail-loc"></span></div>
+            <div id="cal-detail-desc" class="cal-detail-desc scrollable hidden"></div>
+            <div class="cal-detail-actions">
+                <button id="cal-detail-join" class="btn-primary hidden" onclick="calDetailJoin()"><i class="fas fa-video"></i> <span id="cal-detail-join-label">Join</span></button>
+                <button id="cal-detail-nav" class="btn-primary hidden" onclick="calDetailNavigate()"><i class="fas fa-location-arrow"></i> Navigate there</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings: category rail + one section at a time, sized to fit the screen.
+         Every control saves on change; there is no Save button to forget. -->
+    <div id="settings-overlay" class="overlay hidden">
+        <div class="overlay-content settings-panel">
+            <nav class="settings-rail">
+                <h2>Settings</h2>
+                <button class="settings-tab active" data-section="appearance" onclick="settingsSection('appearance')"><i class="fas fa-palette"></i>Appearance</button>
+                <button class="settings-tab" data-section="driving" onclick="settingsSection('driving')"><i class="fas fa-gauge-high"></i>Driving</button>
+                <button class="settings-tab" data-section="fuel" onclick="settingsSection('fuel')"><i class="fas fa-gas-pump"></i>Fuel</button>
+                <button class="settings-tab" data-section="display" onclick="settingsSection('display')"><i class="fas fa-display"></i>Display</button>
+                <button class="settings-tab" data-section="wifi" onclick="settingsSection('wifi')"><i class="fas fa-wifi"></i>Wi-Fi</button>
+                <button class="settings-tab" data-section="bluetooth" onclick="settingsSection('bluetooth')"><i class="fab fa-bluetooth-b"></i>OBD adapter</button>
+                <button class="settings-tab" data-section="services" onclick="settingsSection('services')"><i class="fas fa-plug"></i>Services</button>
+                <button onclick="toggleSettings()" class="btn-close settings-done">Done</button>
+            </nav>
+
+            <section class="settings-section" data-section="appearance">
+                <h3>Theme</h3>
+                <div class="theme-grid">
+                    <button class="theme-card" data-theme-choice="night" onclick="chooseTheme('night')">
+                        <span class="theme-swatch" data-theme="night"><span class="sw-card"><span class="sw-dot"></span><span class="sw-line"></span></span></span>
+                        <strong>Night instrument</strong><small class="muted">Default · cyan on black</small>
+                    </button>
+                    <button class="theme-card" data-theme-choice="glass" onclick="chooseTheme('glass')">
+                        <span class="theme-swatch" data-theme="glass"><span class="sw-card"><span class="sw-dot"></span><span class="sw-line"></span></span></span>
+                        <strong>Ambient glass</strong><small class="muted">Frosted panels, soft colour</small>
+                    </button>
+                    <button class="theme-card" data-theme-choice="amber" onclick="chooseTheme('amber')">
+                        <span class="theme-swatch" data-theme="amber"><span class="sw-card"><span class="sw-dot"></span><span class="sw-line"></span></span></span>
+                        <strong>Amber night</strong><small class="muted">Warm, low-blue light</small>
+                    </button>
+                    <button class="theme-card" data-theme-choice="day" onclick="chooseTheme('day')">
+                        <span class="theme-swatch" data-theme="day"><span class="sw-card"><span class="sw-dot"></span><span class="sw-line"></span></span></span>
+                        <strong>Daylight</strong><small class="muted">Light, for direct sun</small>
+                    </button>
+                </div>
+            </section>
+
+            <section class="settings-section hidden" data-section="driving">
+                <h3>Driving</h3>
+                <div class="setting-row">
+                    <div><strong>Speed alarm</strong><small class="muted">Warns above this speed · 0 = off</small></div>
+                    <div class="stepper">
+                        <button onclick="stepSpeedAlarm(-10)" aria-label="Lower"><i class="fas fa-minus"></i></button>
+                        <span id="set-speed-alarm">Off</span>
+                        <button onclick="stepSpeedAlarm(10)" aria-label="Raise"><i class="fas fa-plus"></i></button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div><strong>Units</strong><small class="muted">Speed and distance</small></div>
+                    <div class="media-tabs setting-choice" data-group="units"><button class="media-tab" data-value="metric" onclick="setSettingChoice('units', 'metric')">Metric</button><button class="media-tab" data-value="imperial" onclick="setSettingChoice('units', 'imperial')">Imperial</button></div>
+                </div>
+            </section>
+
+            <section class="settings-section hidden" data-section="fuel">
+                <h3>Fuel</h3>
+                <div class="setting-row">
+                    <div><strong>Tank capacity</strong><small class="muted">Turns the fuel gauge into litres</small></div>
+                    <div class="stepper">
+                        <button onclick="stepFuelSetting('fuel_tank_l', -1)" aria-label="Lower"><i class="fas fa-minus"></i></button>
+                        <span id="set-fuel-tank">--</span>
+                        <button onclick="stepFuelSetting('fuel_tank_l', 1)" aria-label="Raise"><i class="fas fa-plus"></i></button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div><strong>Fuel price</strong><small class="muted">Used until a refill gives the real price</small></div>
+                    <div class="stepper">
+                        <button onclick="stepFuelSetting('fuel_price_eur_l', -1)" aria-label="Lower"><i class="fas fa-minus"></i></button>
+                        <span id="set-fuel-price">--</span>
+                        <button onclick="stepFuelSetting('fuel_price_eur_l', 1)" aria-label="Raise"><i class="fas fa-plus"></i></button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div><strong>Consumption</strong><small class="muted">When the car reports no fuel flow</small></div>
+                    <div class="stepper">
+                        <button onclick="stepFuelSetting('fuel_l100', -1)" aria-label="Lower"><i class="fas fa-minus"></i></button>
+                        <span id="set-fuel-l100">--</span>
+                        <button onclick="stepFuelSetting('fuel_l100', 1)" aria-label="Raise"><i class="fas fa-plus"></i></button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="settings-section hidden" data-section="display">
+                <h3>Display</h3>
+                <div class="setting-row">
+                    <div><strong>Screensaver</strong><small class="muted">Clock after this idle time</small></div>
+                    <div class="media-tabs setting-choice" data-group="screensaver"><button class="media-tab" data-value="0" onclick="setSettingChoice('screensaver', 0)">Off</button><button class="media-tab" data-value="60" onclick="setSettingChoice('screensaver', 60)">1 min</button><button class="media-tab" data-value="300" onclick="setSettingChoice('screensaver', 300)">5 min</button><button class="media-tab" data-value="600" onclick="setSettingChoice('screensaver', 600)">10 min</button><button class="media-tab" data-value="1800" onclick="setSettingChoice('screensaver', 1800)">30 min</button></div>
+                </div>
+            </section>
+
+            <section class="settings-section hidden" data-section="wifi">
+                <h3>Wi-Fi</h3>
+                <div id="wifi-status-row" class="setting-row">
+                    <div><strong id="wifi-state">Checking…</strong><small id="wifi-detail" class="muted"></small></div>
+                    <div class="conn-actions">
+                        <button class="btn-close btn-close-compact" onclick="RasCar.connections.wifiRetry()" aria-label="Reconnect"><i class="fas fa-rotate-right"></i></button>
+                        <button class="btn-primary" onclick="RasCar.connections.wifiScan()"><i class="fas fa-magnifying-glass"></i> Scan</button>
+                    </div>
+                </div>
+                <div id="wifi-list" class="conn-list scrollable"></div>
+                <div id="wifi-password" class="conn-password hidden">
+                    <div class="ytm-query-row">
+                        <i class="fas fa-key"></i>
+                        <span id="wifi-password-text" class="ytm-query"></span>
+                        <button class="ytm-clear" onclick="RasCar.connections.togglePasswordVisible()" aria-label="Show password"><i id="wifi-password-eye" class="fas fa-eye"></i></button>
+                        <button class="ytm-clear" onclick="RasCar.connections.cancelPassword()" aria-label="Cancel"><i class="fas fa-xmark"></i></button>
+                    </div>
+                    <div id="wifi-osk" class="osk" aria-label="Keyboard"></div>
+                </div>
+            </section>
+
+            <section class="settings-section hidden" data-section="bluetooth">
+                <h3>OBD adapter</h3>
+                <div class="setting-row">
+                    <div><strong id="bt-obd-state">Checking…</strong><small id="bt-obd-detail" class="muted"></small></div>
+                    <div class="conn-actions">
+                        <button id="bt-obd-forget" class="btn-danger hidden" onclick="RasCar.connections.obdForget()">Automatic</button>
+                        <button id="bt-scan" class="btn-primary" onclick="RasCar.connections.btScan()"><i class="fas fa-magnifying-glass"></i> Scan</button>
+                    </div>
+                </div>
+                <div id="bt-list" class="conn-list scrollable"></div>
+            </section>
+
+            <section class="settings-section hidden" data-section="services">
+                <h3>Services</h3>
+                <div class="setting-row">
+                    <div><strong>Calendar</strong><small class="muted">Feeds are set in settings.json on the Pi</small></div>
+                    <span id="set-calendar-sources" class="setting-value">--</span>
+                </div>
+                <div class="setting-row">
+                    <div><strong>YouTube Music</strong><small class="muted">Sign in on the Pi with <code>ytmusicapi browser</code></small></div>
+                    <span id="ytmusic-status" class="ytmusic-status checking">Checking…</span>
+                </div>
+                <!-- The car's head unit, as it identifies itself over CarPlay (/api/headunit). -->
+                <div class="setting-row">
+                    <div><strong>Car</strong><small id="hu-detail" class="muted">Known after the first CarPlay session</small></div>
+                    <span id="hu-name" class="setting-value">--</span>
+                </div>
+                <div class="setting-row">
+                    <div><strong>USB power from the car</strong><small id="hu-power-detail" class="muted"></small></div>
+                    <span id="hu-power" class="setting-value">--</span>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Screensaver Overlay -->
+    <!-- Dismissal is bound in app.js (capture phase) so the waking tap cannot
+         fall through to the page underneath. -->
+    <div id="screensaver" class="overlay hidden">
+        <div class="screensaver-content">
+            <div id="ss-clock" class="ss-clock">--:--</div>
+            <div id="ss-date" class="ss-date"></div>
+            <div id="ss-weather" class="ss-weather"></div>
+            <div id="ss-media" class="ss-media"></div>
+        </div>
+    </div>
+
+    <!-- ── Fullscreen Media Overlay ─────────────────────────────── -->
+    <div id="media-fullscreen">
+        <canvas id="fs-viz-canvas"></canvas>
+        <!-- Visualizer-only mode (tap the home vumeter): close button + mode name. -->
+        <button class="viz-close" onclick="event.stopPropagation(); RasCar.media.exitFullscreen()" aria-label="Close visualizer"><i class="fas fa-xmark"></i></button>
+        <div id="viz-only-label" class="viz-only-label" aria-live="polite"></div>
+        <!-- The status bar is covered here: keep the time visible in both modes. -->
+        <span id="fs-clock" class="dock-clock fs-clock">--:--</span>
+
+        <!-- Top: album art (left) + control buttons (right) -->
+        <div class="fs-top">
+            <div class="fs-album-container" onclick="RasCar.media.searchArtist()">
+                <div class="fs-album-glow"></div>
+                <div class="fs-album-art" id="fs-album-art"><i class="fas fa-music"></i></div>
+            </div>
+            <div class="fs-ctrl-grid">
+                <button class="fs-ctrl-btn" id="fs-karaoke-btn" onclick="RasCar.media.toggleKaraoke()" title="Karaoke"><i class="fas fa-microphone-alt"></i></button>
+                <button class="fs-ctrl-btn" id="fs-viz-btn" onclick="RasCar.media.nextVizMode()" title="Visualization"><i class="fas fa-wave-square"></i></button>
+                <button class="fs-ctrl-btn" id="fs-shuffle-btn" onclick="RasCar.media.toggleShuffle()" title="Shuffle"><i class="fas fa-random"></i></button>
+                <button class="fs-ctrl-btn" id="fs-repeat-btn" onclick="RasCar.media.cycleRepeat()" title="Repeat"><i class="fas fa-repeat"></i></button>
+                <button class="fs-ctrl-btn" id="fs-liked-btn" onclick="RasCar.media.showLikedSongs()" title="Liked Songs"><i class="fas fa-heart"></i></button>
+                <button class="fs-ctrl-btn" onclick="RasCar.media.showPlaylists()" title="Playlists"><i class="fas fa-list"></i></button>
+                <button class="fs-ctrl-btn" onclick="RasCar.media.exitFullscreen()" title="Exit"><i class="fas fa-times"></i></button>
+            </div>
+        </div>
+
+        <!-- Karaoke Overlay (inside fullscreen) -->
+        <div id="karaoke-overlay" onclick="RasCar.media.toggleKaraoke()">
+            <div class="karaoke-lyrics" id="karaoke-lyrics"></div>
+        </div>
+
+        <!-- Playlist Overlay (inside fullscreen) -->
+        <div id="playlist-overlay">
+            <div class="playlist-header">
+                <h3 id="playlist-title">Playlists</h3>
+                <div class="playlist-header-actions">
+                    <!-- Shown when the overlay lists tracks (liked songs, a playlist). -->
+                    <button id="playlist-play-all" class="fs-ctrl-btn fs-ctrl-btn-small hidden" onclick="RasCar.media.playAll(false)" title="Play all"><i class="fas fa-play"></i></button>
+                    <button id="playlist-shuffle-all" class="fs-ctrl-btn fs-ctrl-btn-small hidden" onclick="RasCar.media.playAll(true)" title="Shuffle all"><i class="fas fa-random"></i></button>
+                    <button id="playlist-radio" class="fs-ctrl-btn fs-ctrl-btn-small hidden" onclick="RasCar.media.listRadio()" title="Radio"><i class="fas fa-tower-broadcast"></i></button>
+                    <button class="fs-ctrl-btn fs-ctrl-btn-small" onclick="RasCar.media.closePlaylists()"><i class="fas fa-times"></i></button>
+                </div>
+            </div>
+            <div class="playlist-grid" id="playlist-grid"></div>
+        </div>
+
+        <!-- Search Results Overlay (inside fullscreen) -->
+        <div id="search-overlay">
+            <div class="playlist-header">
+                <div class="playlist-header-title">
+                    <h3>Search Results</h3>
+                    <span id="search-query"></span>
+                </div>
+                <button class="fs-ctrl-btn fs-ctrl-btn-small" onclick="RasCar.media.closeSearch()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="playlist-grid" id="search-results-grid"></div>
+        </div>
+
+        <!-- Bottom: song info + transport -->
+        <div class="fs-bottom">
+            <div class="fs-song-title" id="fs-title">No media playing</div>
+            <div class="fs-song-artist" id="fs-artist"></div>
+            <div class="fs-progress" id="fs-progress-row">
+                <span class="fs-progress-time" id="fs-time-current">0:00</span>
+                <div class="fs-progress-bar" id="fs-progress-bar" onclick="RasCar.media.seekTo(event)"><div class="fs-progress-fill" id="fs-progress-fill"></div></div>
+                <span class="fs-progress-time" id="fs-time-total">0:00</span>
+            </div>
+            <div class="fs-transport">
+                <button class="fs-transport-btn small dislike" onclick="RasCar.media.dislike()"><i class="fas fa-thumbs-down"></i></button>
+                <button class="fs-transport-btn" onclick="mediaCmd('previous')"><i class="fas fa-backward"></i></button>
+                <button class="fs-transport-btn play" id="fs-play-btn" onclick="mediaCmd('play-pause')"><i class="fas fa-pause"></i></button>
+                <button class="fs-transport-btn" onclick="mediaCmd('next')"><i class="fas fa-forward"></i></button>
+                <button class="fs-transport-btn small like" onclick="RasCar.media.like()"><i class="fas fa-thumbs-up"></i></button>
+            </div>
+            <div class="viz-mode-label" id="fs-viz-mode" onclick="RasCar.media.nextVizMode()">Bars</div>
+        </div>
+    </div>
+
+    <script src="/vendor/maplibre/maplibre-gl.js"></script>
+    <script src="/vendor/maplibre/pmtiles.js"></script>
+    <script src="/vendor/maplibre/basemaps.js"></script>
+    <script src="/js/navmap.js?v=20261010pub"></script>
+    <script src="/js/media.js?v=20261001b"></script>
+    <script src="/js/app.js?v=20261010os"></script>
+    <script src="/js/fuel.js?v=20261010os"></script>
+    <script src="/js/cell.js?v=20261009"></script>
+    <script src="/js/phone.js?v=20261010"></script>
+    <script src="/js/home.js?v=20261010os"></script>
+    <script src="/js/connections.js?v=20260928"></script>
+</body>
+</html>

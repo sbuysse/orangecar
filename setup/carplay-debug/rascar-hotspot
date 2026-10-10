@@ -1,0 +1,112 @@
+#!/bin/bash
+#
+# rascar-hotspot — WiFi access point for reaching the board over SSH in the car.
+#
+#   rascar-hotspot auto   wait for Ethernet; start the AP only if none shows up
+#                         (at home the cable is in and nothing changes; in the car
+#                         there is no cable, so the AP comes up)
+#   rascar-hotspot on     start the AP unconditionally
+#   rascar-hotspot off    stop the AP and hand wlan back to its normal config
+#   rascar-hotspot status
+#
+# Connect to the SSID (default "RasCar-debug", passphrase in
+# /etc/rascar/hotspot.pass, generated at install), then
+#   ssh <user>@10.42.0.1
+#
+# Settings: /etc/rascar/hotspot.conf (written by setup/install.sh)
+#   WLAN=wlP2p33s0     Wi-Fi interface for the AP (Orange Pi 5 Plus M.2 card)
+#   ETH=enP3p49s0      wired interface whose carrier means "at home, no AP"
+#   COUNTRY=           regulatory country code (e.g. DE); empty = leave as is
+#   SSID=RasCar-debug  must match /etc/hostapd/<WLAN>.conf
+# Unset interfaces are auto-detected (first wireless / first wired interface).
+#
+# The AP address/DHCP config is written to /run (volatile), sorting before the
+# board's own /etc/systemd/network/25-wlan-*.network, so nothing about the normal
+# WiFi client setup is modified and a reboot always returns to it.
+
+set -u
+
+CONF=/etc/rascar/hotspot.conf
+WLAN="" ETH="" COUNTRY="" SSID=RasCar-debug
+# shellcheck disable=SC1090
+[[ -r $CONF ]] && . "$CONF"
+first_if() {   # $1 = wireless|wired
+    local d
+    for d in /sys/class/net/*; do
+        [[ -e $d/device ]] || continue
+        if [[ $1 == wireless ]]; then
+            [[ -d $d/wireless || -d $d/phy80211 ]] && { basename "$d"; return; }
+        else
+            [[ ! -d $d/wireless && ! -d $d/phy80211 && $(cat "$d/type" 2>/dev/null) == 1 ]] \
+                && [[ $(basename "$(readlink -f "$d/device/driver")") != cdc_ncm ]] && { basename "$d"; return; }
+        fi
+    done
+}
+[[ -n $WLAN ]] || WLAN=$(first_if wireless)
+[[ -n $ETH ]] || ETH=$(first_if wired)
+NETCONF=/run/systemd/network/10-rascar-hotspot.network
+# Instance = interface: Debian's template BindsTo sys-subsystem-net-devices-%i.device.
+AP_UNIT=hostapd@$WLAN.service
+WAIT_ETH=45
+
+log() { echo "rascar-hotspot: $*"; }
+[[ -n $WLAN ]] || { log "no Wi-Fi interface found"; exit 1; }
+
+eth_up() { [[ $(cat /sys/class/net/$ETH/carrier 2>/dev/null) == 1 ]]; }
+
+start_ap() {
+    mkdir -p /run/systemd/network
+    cat > "$NETCONF" <<EOF
+[Match]
+Name=$WLAN
+
+[Network]
+Address=10.42.0.1/24
+DHCPServer=yes
+LinkLocalAddressing=ipv6
+ConfigureWithoutCarrier=yes
+
+[DHCPServer]
+PoolOffset=10
+PoolSize=40
+EmitDNS=no
+EmitRouter=no
+EOF
+    # A client-mode supplicant on the same radio would fight hostapd for it.
+    systemctl stop "wpa_supplicant@$WLAN.service" 2>/dev/null
+    [[ -n $COUNTRY ]] && iw reg set "$COUNTRY" 2>/dev/null
+    networkctl reload
+    systemctl start "$AP_UNIT" || { log "hostapd failed to start"; return 1; }
+    networkctl reconfigure "$WLAN"
+    log "AP up: SSID $SSID, board at 10.42.0.1 (passphrase: /etc/rascar/hotspot.pass)"
+}
+
+stop_ap() {
+    systemctl stop "$AP_UNIT" 2>/dev/null
+    rm -f "$NETCONF"
+    networkctl reload
+    networkctl reconfigure "$WLAN" 2>/dev/null
+    log "AP down"
+}
+
+case "${1:-status}" in
+    auto)
+        for ((i = 0; i < WAIT_ETH; i++)); do
+            if [[ -n $ETH ]] && eth_up; then
+                log "Ethernet carrier on $ETH — hotspot not needed"
+                exit 0
+            fi
+            sleep 1
+        done
+        log "no Ethernet carrier after ${WAIT_ETH}s — assuming in-car, starting AP"
+        start_ap
+        ;;
+    on)  start_ap ;;
+    off) stop_ap ;;
+    status)
+        systemctl is-active "$AP_UNIT" >/dev/null && log "AP active" || log "AP inactive"
+        [[ -f $NETCONF ]] && log "hotspot network config present"
+        eth_up && log "Ethernet carrier: yes" || log "Ethernet carrier: no"
+        ;;
+    *) echo "usage: $0 auto|on|off|status" >&2; exit 2 ;;
+esac

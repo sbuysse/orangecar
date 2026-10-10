@@ -1,0 +1,10 @@
+# RasCar: systemd-networkd must not manage the car's CDC-NCM link.
+# Armbian's netplan (10-dhcp-all-interfaces.yaml, Name=e*) otherwise runs a DHCP
+# client, IPv6 privacy addresses and LLMNR on it and flushes the addresses
+# rascar-carplay sets. rascar-carplay configures this link itself.
+# Only cdc_ncm matches: the r8169 Ethernet (SSH) and rtw89 Wi-Fi stay managed.
+[Match]
+Driver=cdc_ncm
+
+[Link]
+Unmanaged=yes

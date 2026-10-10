@@ -1,0 +1,92 @@
+/* 4G panel (js/cell.js): status + usage | 30-day chart | 12 months, controls row below.
+   Sized for the car screen (1200x512): the panel never scrolls. */
+
+:root, [data-theme] {
+    /* Chart series, validated with the dataviz palette checker (OKLab CVD ΔE ≥ 8
+       on #07080f); the brand cyan itself is too light for a filled bar next to violet. */
+    --cell-rx: #0099c0;
+    --cell-tx: #9070f0;
+}
+[data-theme="day"] {
+    /* On white: CVD ΔE 7.7, legal with the 2px gap between the stacked segments. */
+    --cell-rx: #0086b3;
+    --cell-tx: #7c5cd6;
+}
+
+.overlay-content.cell-panel {
+    max-width: 1160px; width: 97%; height: 94vh; max-height: none; overflow: hidden;
+    display: flex; flex-direction: column; gap: 10px; padding: 14px 18px;
+}
+.cell-panel .obd-chart-header { margin-bottom: 0; gap: 12px; }
+.cell-panel .obd-chart-header small { font-size: 14px; }
+
+.cell-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 290px minmax(0, 1fr) 236px; gap: 14px; }
+.cell-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px;
+    background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; }
+.cell-label { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-secondary); }
+
+/* Status block */
+.cell-op { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.cell-op strong { font-family: var(--font-display); font-size: 22px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell-op span { font-size: 14px; font-weight: 700; color: var(--accent); flex: none; }
+.cell-sig { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.cell-sig .sb-signal { height: 20px; gap: 3px; }
+.cell-sig .sig-bar { width: 6px; }
+.cell-sig .sig-bar:nth-child(1) { height: 6px; }
+.cell-sig .sig-bar:nth-child(2) { height: 9px; }
+.cell-sig .sig-bar:nth-child(3) { height: 12px; }
+.cell-sig .sig-bar:nth-child(4) { height: 15px; }
+.cell-sig .sig-bar:nth-child(5) { height: 20px; }
+.cell-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; font-size: 14px; }
+.cell-kv span:nth-child(odd) { color: var(--text-secondary); }
+.cell-kv span:nth-child(even) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.cell-state-off { color: var(--danger); font-weight: 700; }
+
+.cell-usage { margin-top: auto; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
+.cell-usage-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cell-usage-row strong { font-family: var(--font-display); font-size: 24px; font-weight: 300; font-variant-numeric: tabular-nums; }
+.cell-meter { height: 10px; border-radius: 999px; background: var(--bg-primary); border: 1px solid var(--border); overflow: hidden; }
+.cell-meter > div { height: 100%; width: 0; border-radius: 999px; background: var(--accent); transition: width 0.3s; }
+.cell-meter.warn > div { background: var(--warning); }
+.cell-meter.over > div { background: var(--danger); }
+.cell-usage small { font-size: 13px; }
+.cell-usage small.cell-allow-warn { color: var(--warning); }
+
+/* Chart */
+.cell-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.cell-legend { display: flex; gap: 14px; font-size: 13px; color: var(--text-secondary); }
+.cell-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.cell-legend .rx { background: var(--cell-rx); }
+.cell-legend .tx { background: var(--cell-tx); }
+#cell-chart { flex: 1; min-height: 0; width: 100%; display: block; cursor: pointer; }
+.cell-readout { font-size: 14px; min-height: 20px; color: var(--text-primary); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Months table */
+.cell-months { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.cell-months td { padding: 2px 0; line-height: 1.25; }
+.cell-months td:last-child { text-align: right; }
+.cell-months tr.current td { color: var(--accent); font-weight: 700; }
+.cell-months tr.zero td { color: var(--text-secondary); opacity: 0.6; }
+
+/* Controls row: every target ≥ 48 px high. */
+.cell-controls { display: flex; align-items: center; gap: 8px; flex: none; }
+.cell-controls .media-tab { flex: none; min-height: 52px; padding: 0 16px; white-space: nowrap; }
+.cell-controls .media-tab.off { border-color: var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.cell-controls .btn-primary { min-height: 52px; padding: 0 18px; white-space: nowrap; }
+.cell-controls .stepper { gap: 6px; padding: 0 4px 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-secondary); }
+.cell-controls .stepper { padding: 0 2px; }
+.cell-controls .stepper button { width: 48px; height: 48px; }
+/* Caption inside the stepper: no separate label, the row has no width to spare. */
+.cell-controls .stepper .cell-step-val { min-width: 84px; display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.cell-step-val small { font-family: var(--font); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--text-secondary); }
+.cell-step-val b { font-family: var(--font-display); font-size: 18px; font-weight: 400; }
+.cell-controls .spacer { flex: 1; }
+.cell-busy { opacity: 0.5; pointer-events: none; }
+
+/* Status bar: allowance warning (≥ 80 %) and over (≥ 100 %), 4G turned off. */
+#sb-cell.quota-warn .sb-cell-label { color: var(--warning); }
+#sb-cell.quota-warn .sig-bar.active { background: var(--warning); }
+#sb-cell.quota-over .sb-cell-label { color: var(--danger); }
+#sb-cell.quota-over .sig-bar.active { background: var(--danger); }
+#sb-cell.cell-off .sb-signal { opacity: 0.25; }
+#sb-cell.cell-off .sb-cell-label::after { content: " OFF"; color: var(--danger); }

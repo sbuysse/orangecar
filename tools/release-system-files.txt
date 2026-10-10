@@ -1,0 +1,27 @@
+# System files shipped by every OTA release (tools/release.sh).
+#
+#   <repo path>   <absolute destination on the car>   <mode>
+#
+# Only paths the agent's allowlist accepts (agent/src/manifest.rs,
+# system_path_allowed): /usr/local/sbin/rascar-*, /etc/systemd/system/rascar-*
+# units and drop-ins, /etc/udev/rules.d/*rascar*.rules, /etc/modules-load.d/rascar*.
+# The boot guard (rascar-ota-boot + its unit) is never shipped: it is what
+# rolls a bad release back.
+#
+# A file listed here REPLACES the board's copy at the next boot (the previous
+# copy is backed up in the release and restored on rollback). Before the first
+# release, diff the board's copies against the repo (docs/ota.md).
+# Enabling/disabling units is NOT done by a release.
+
+setup/carplay-debug/rascar-carplay-run          /usr/local/sbin/rascar-carplay-run          0755
+setup/carplay-debug/rascar-preflight            /usr/local/sbin/rascar-preflight            0755
+setup/carplay-debug/rascar-debugcap             /usr/local/sbin/rascar-debugcap             0755
+setup/carplay-debug/rascar-bundle               /usr/local/sbin/rascar-bundle               0755
+setup/carplay-debug/rascar-hotspot              /usr/local/sbin/rascar-hotspot              0755
+setup/carplay-debug/rascar-chromium-stop        /usr/local/sbin/rascar-chromium-stop        0755
+setup/carplay-debug/rascar-carplay.service      /etc/systemd/system/rascar-carplay.service  0644
+setup/carplay-debug/rascar-debugcap.service     /etc/systemd/system/rascar-debugcap.service 0644
+setup/carplay-debug/20-chromium-clean-stop.conf /etc/systemd/system/rascar-carplay.service.d/20-chromium-clean-stop.conf 0644
+setup/earlylog/rascar-earlylog                  /usr/local/sbin/rascar-earlylog             0755
+setup/thermal/rascar-thermal                    /usr/local/sbin/rascar-thermal              0755
+setup/ota/rascar-agent.service                  /etc/systemd/system/rascar-agent.service    0644

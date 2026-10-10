@@ -1,0 +1,17 @@
+[Unit]
+Description=RasCar debug WiFi hotspot (only when no Ethernet cable — i.e. in the car)
+After=systemd-networkd.service network.target
+Wants=systemd-networkd.service
+
+[Service]
+# Type=exec, not oneshot: "auto" waits up to 45 s for an Ethernet carrier, and a
+# oneshot would hold multi-user.target (and everything after it) for that long.
+# RemainAfterExit keeps the unit active after the script exits, so ExecStop
+# still takes the AP down.
+Type=exec
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rascar-hotspot auto
+ExecStop=/usr/local/sbin/rascar-hotspot off
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,127 @@
+/* Phone calls (js/phone.js): incoming overlay, in-call screen, status pill.
+   Above everything the dashboard can show (fullscreen media 150, app layer 170,
+   TV PiP 180, overlays 200, nav popup 300): an incoming call must never be
+   hidden. */
+
+.overlay.phone-overlay { z-index: 9000; }
+.phone-card {
+    position: relative;
+    max-width: 640px; width: 90%;
+    display: flex; gap: 28px; align-items: stretch;
+    padding: 26px 30px; overflow: hidden;
+}
+.phone-overlay.keypad-open .phone-card { max-width: 1000px; }
+.phone-main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 22px; }
+
+/* Minimise: top-right, a full 56 px touch target. */
+.phone-min {
+    position: absolute; top: 10px; right: 10px; width: 56px; height: 56px; border-radius: 50%;
+    background: var(--bg-secondary); border: 1px solid var(--border-strong); color: var(--text-secondary);
+    font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.phone-min:active { transform: scale(0.94); }
+
+.phone-who { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; min-width: 0; max-width: 100%; }
+.phone-avatar {
+    position: relative; width: 92px; height: 92px; border-radius: 50%; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+    color: var(--accent); font-family: var(--font-display); font-size: 40px; font-weight: 600;
+}
+.phone-avatar i { font-size: 36px; }
+/* Ringing: two soft rings expand from the avatar (green = the answer colour). */
+.phone-overlay[data-state="incoming"] .phone-avatar {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+    border-color: var(--success); color: var(--success);
+}
+.phone-overlay[data-state="incoming"] .phone-avatar::before,
+.phone-overlay[data-state="incoming"] .phone-avatar::after {
+    content: ''; position: absolute; inset: -1px; border-radius: 50%;
+    border: 2px solid var(--success); animation: phone-ring 1.8s ease-out infinite; pointer-events: none;
+}
+.phone-overlay[data-state="incoming"] .phone-avatar::after { animation-delay: 0.9s; }
+@keyframes phone-ring {
+    from { transform: scale(1); opacity: 0.7; }
+    to { transform: scale(1.7); opacity: 0; }
+}
+.phone-who-text { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.phone-state { font-size: 15px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; color: var(--accent); min-height: 18px; }
+.phone-overlay[data-state="incoming"] .phone-state { color: var(--success); }
+.phone-overlay[data-state="ended"] .phone-state { color: var(--danger); }
+.phone-name {
+    font-family: var(--font-display); font-size: 34px; font-weight: 600; letter-spacing: -0.4px;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.phone-number { font-size: 17px; min-height: 0; }
+.phone-number:empty, .phone-timer:empty { display: none; }
+.phone-timer { font-family: var(--font-display); font-size: 22px; font-weight: 300; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+
+/* Buttons: >= 64 px everywhere (drivers tap without looking). */
+.phone-actions { display: flex; gap: 18px; justify-content: center; width: 100%; }
+.phone-actions.hidden { display: none; }
+.phone-btn {
+    flex: 1; max-width: 220px; min-height: 76px; border-radius: 999px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 12px;
+    font-family: var(--font); font-size: 19px; font-weight: 700;
+    background: var(--bg-secondary); border: 1px solid var(--border-strong); color: var(--text-primary);
+}
+.phone-btn i { font-size: 22px; }
+.phone-btn:active:not(:disabled) { transform: scale(0.96); }
+.phone-btn:disabled { opacity: 0.35; cursor: default; }
+.phone-answer {
+    background: color-mix(in srgb, var(--success) 18%, transparent); border-color: var(--success); color: var(--success);
+    box-shadow: 0 0 26px color-mix(in srgb, var(--success) 30%, transparent);
+}
+.phone-decline, .phone-hangup {
+    background: color-mix(in srgb, var(--danger) 18%, transparent); border-color: var(--danger); color: var(--danger);
+}
+/* Incoming: the two choices are the whole screen's purpose — make them big. */
+.phone-overlay[data-state="incoming"] .phone-btn { min-height: 88px; max-width: 240px; font-size: 21px; }
+/* In call: Mute / Keypad are tools (icon over label), Hang up stays a pill. */
+.phone-tool { flex-direction: column; gap: 4px; max-width: 132px; font-size: 14px; border-radius: var(--radius-md); }
+.phone-tool.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+#phone-mute.on { background: color-mix(in srgb, var(--warning) 16%, transparent); border-color: var(--warning); color: var(--warning); }
+
+/* In-call keypad (DTMF): right column when open. */
+.phone-keypad { width: 330px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+.phone-keypad.hidden { display: none; }
+.phone-dtmf {
+    min-height: 40px; font-family: var(--font-display); font-size: 26px; font-weight: 300; letter-spacing: 2px;
+    text-align: center; overflow: hidden; white-space: nowrap; direction: rtl; /* keep the newest digits visible */
+}
+.phone-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.phone-keys button {
+    min-height: 64px; border-radius: var(--radius-sm); cursor: pointer;
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    color: var(--text-primary); font-family: var(--font-display); font-size: 26px; font-weight: 300;
+}
+.phone-keys button:active { transform: scale(0.95); border-color: var(--border-strong); }
+.phone-overlay.keypad-open .phone-main { gap: 16px; justify-content: center; }
+.phone-overlay.keypad-open .phone-avatar { width: 72px; height: 72px; font-size: 30px; }
+
+/* Minimised call: a pill centred in the status row, above fullscreen media
+   and the app layer so the call stays one tap away from anywhere. */
+.phone-pill {
+    position: fixed; top: 5px; left: calc(50% + var(--dock-w) / 2); transform: translateX(-50%); z-index: 9000;
+    display: flex; align-items: center; gap: 10px; height: 36px; max-width: 360px; padding: 0 18px 0 6px;
+    border-radius: 999px; cursor: pointer; font-family: var(--font); font-size: 15px; font-weight: 700;
+    background: color-mix(in srgb, var(--success) 20%, var(--bg-secondary)); border: 1px solid var(--success); color: var(--text-primary);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+.phone-pill.hidden { display: none; }
+/* A 36 px pill in a 44 px row: extend the touch target to the full row height and beyond. */
+.phone-pill::after { content: ''; position: absolute; inset: -6px -4px; }
+.phone-pill-icon {
+    width: 26px; height: 26px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+    background: var(--success); color: var(--bg-primary); font-size: 13px;
+}
+.phone-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-pill-text { font-variant-numeric: tabular-nums; color: var(--success); white-space: nowrap; }
+.phone-pill[data-state="held"], .phone-pill[data-state="dialing"], .phone-pill[data-state="alerting"] { border-color: var(--accent); }
+.phone-pill[data-state="held"] .phone-pill-icon, .phone-pill[data-state="dialing"] .phone-pill-icon,
+.phone-pill[data-state="alerting"] .phone-pill-icon { background: var(--accent); }
+.phone-pill[data-state="held"] .phone-pill-text, .phone-pill[data-state="dialing"] .phone-pill-text,
+.phone-pill[data-state="alerting"] .phone-pill-text { color: var(--accent); }
+.phone-pill[data-state="ended"] { border-color: var(--danger); }
+.phone-pill[data-state="ended"] .phone-pill-icon { background: var(--danger); }
+.phone-pill[data-state="ended"] .phone-pill-text { color: var(--danger); }

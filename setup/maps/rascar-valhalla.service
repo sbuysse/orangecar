@@ -1,0 +1,21 @@
+[Unit]
+Description=RasCar offline routing (Valhalla, loopback :8002) for the dashboard map
+# Graph built by setup/maps/build-routing.sh, rsynced to /var/lib/rascar/routing.
+ConditionPathExists=/var/lib/rascar/routing/tiles.tar
+After=network.target
+
+[Service]
+# Loopback only: rascar-app (/api/route) is the one client.
+ExecStartPre=-/usr/bin/podman rm -f rascar-valhalla
+ExecStart=/usr/bin/podman run --rm --name rascar-valhalla --network host \
+    -v /var/lib/rascar/routing:/data:ro,Z \
+    ghcr.io/valhalla/valhalla:latest \
+    valhalla_service /data/valhalla.pi.json 2
+ExecStop=/usr/bin/podman stop -t 5 rascar-valhalla
+Restart=on-failure
+RestartSec=10
+# Idle it is small; a long route peaks briefly. Keep it off the CarPlay cores' back.
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

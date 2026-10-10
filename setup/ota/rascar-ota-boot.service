@@ -1,0 +1,19 @@
+[Unit]
+Description=RasCar OTA boot guard: roll back an unproven release, or switch to a staged one
+# Local disks only: /opt (release trees) and /var/lib/rascar-agent (state).
+DefaultDependencies=no
+After=local-fs.target
+Before=rascar-app.service rascar-carplay.service rascar-aa.service rascar-bridge.service rascar-kiosk.service rascar-agent.service
+# Ordering only: no rascar unit Requires= this one, so even a failure here
+# never keeps the dashboard or CarPlay from starting.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/rascar-ota-boot
+# Normal runtime is milliseconds (local files + one symlink rename). The cap
+# bounds a wedged helper (daemon-reload) so CarPlay is never held back long.
+TimeoutStartSec=40
+
+[Install]
+WantedBy=multi-user.target

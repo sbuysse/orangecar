@@ -1,0 +1,24 @@
+# 4G USB dongle that shows up as an RNDIS / CDC-Ether network card (e.g. a
+# D-Link DWM-222W or a "HiLink" stick). Sorts before Armbian netplan's
+# 10-netplan-all-eth-interfaces (Name=e*, RouteMetric=100), which would give the
+# dongle the same priority as home Ethernet and hijack the default route.
+# Metric 2048: home Ethernet (100) and Wi-Fi (1024) always win; in the car the
+# dongle is the only default route. CarPlay's cdc_ncm link is handled separately
+# (carplay-debug/01-rascar-carplay-ncm.network). QMI modems (SIM7600) are dialled
+# by rascar-4g-qmi instead.
+[Match]
+Driver=rndis_host cdc_ether
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+DHCP=yes
+LinkLocalAddressing=ipv6
+
+[DHCPv4]
+RouteMetric=2048
+UseDNS=yes
+
+[IPv6AcceptRA]
+RouteMetric=2048

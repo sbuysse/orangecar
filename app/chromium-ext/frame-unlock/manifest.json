@@ -1,0 +1,112 @@
+{
+  "manifest_version": 3,
+  "name": "RasCar frame unlock",
+  "version": "1.13",
+  "description": "Lets the RasCar dashboard embed Maps, Waze, the streaming apps and meetings: strips X-Frame-Options and CSP from their sub-frames, and makes their cookies usable in those frames (SameSite=None).",
+  "permissions": [
+    "declarativeNetRequest",
+    "cookies",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "*://*.cloud.microsoft/*",
+    "*://*.disney.com/*",
+    "*://*.disneyplus.com/*",
+    "*://*.free.fr/*",
+    "*://*.google.com/*",
+    "*://*.live.com/*",
+    "*://*.microsoft.com/*",
+    "*://*.microsoft365.com/*",
+    "*://*.microsoftonline.com/*",
+    "*://*.netflix.com/*",
+    "*://*.office.com/*",
+    "*://*.oqee.net/*",
+    "*://*.oqee.tv/*",
+    "*://*.skype.com/*",
+    "*://*.waze.com/*",
+    "*://*.youtube.com/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "frames",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.disneyplus.com/*"
+      ],
+      "css": [
+        "disney-unhide.css"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://*.waze.com/*"
+      ],
+      "css": [
+        "waze-clean.css"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://*.free.fr/*",
+        "https://*.oqee.tv/*"
+      ],
+      "js": [
+        "free-fullscreen.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.google.com/maps*",
+        "https://*.waze.com/*"
+      ],
+      "js": [
+        "geo-steady.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.cloud.microsoft/*",
+        "https://*.disney.com/*",
+        "https://*.disneyplus.com/*",
+        "https://*.free.fr/*",
+        "https://*.google.com/*",
+        "https://*.live.com/*",
+        "https://*.microsoft.com/*",
+        "https://*.microsoft365.com/*",
+        "https://*.microsoftonline.com/*",
+        "https://*.netflix.com/*",
+        "https://*.office.com/*",
+        "https://*.oqee.net/*",
+        "https://*.oqee.tv/*",
+        "https://*.skype.com/*",
+        "https://*.waze.com/*",
+        "https://*.youtube.com/*"
+      ],
+      "js": [
+        "cookie-none.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

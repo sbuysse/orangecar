@@ -1,0 +1,17 @@
+[Unit]
+Description=RasCar OBD-II: find, pair and bind the car's Bluetooth ELM327 to /dev/rfcomm0
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+# RASCAR_HOME: where the dashboard's settings.json lives (written by install.sh).
+EnvironmentFile=-/etc/rascar/install.env
+ExecStart=/usr/local/sbin/rascar-obd-link
+Restart=always
+RestartSec=10
+# Pin one adapter instead of discovering it:
+# Environment=OBD_MAC=AA:BB:CC:DD:EE:FF
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,42 @@
+#!/bin/bash
+# rascar-earlylog — keep a trace of boots that die in their first minute.
+#
+# Since 2026-10-01 some boots die ~7-30 s after power-on. Nothing of them
+# survives: the journal moves to the zram /var/log and the page cache is never
+# written back before the board dies. This copies the kernel log and the
+# journal to the NVMe and fsyncs them every second for the first $SECS s, so
+# the last line on disk shows how far a dead boot got.
+set -u
+SECS=${RASCAR_EARLYLOG_SECS:-90}
+KEEP=40
+DIR=${RASCAR_EARLYLOG_DIR:-/var/lib/rascar-debug/earlyboot}
+mkdir -p "$DIR"
+id=$(cut -c1-8 /proc/sys/kernel/random/boot_id)
+out=$DIR/$(date +%Y%m%d-%H%M%S)-$id
+kmsg=$out.kmsg
+jrnl=$out.journal
+prog=$out.progress
+
+# Oldest first; keep the last $KEEP boots.
+ls -1 "$DIR"/*.progress 2>/dev/null | head -n -$KEEP | while read -r f; do
+    rm -f "${f%.progress}".*
+done
+
+# /dev/kmsg replays the whole ring buffer, then follows.
+timeout -k 2 "$((SECS + 5))" cat /dev/kmsg > "$kmsg" &
+timeout -k 2 "$((SECS + 5))" journalctl -b -f -n all -o short-monotonic --no-pager > "$jrnl" 2>&1 &
+
+for ((i = 0; i < SECS; i++)); do
+    {
+        printf 'uptime %s  jobs %s  load %s\n' \
+            "$(cut -d' ' -f1 /proc/uptime)" \
+            "$(timeout 2 systemctl list-jobs --no-legend 2>/dev/null | wc -l)" \
+            "$(cut -d' ' -f1-3 /proc/loadavg)"
+        timeout 2 systemctl list-jobs --no-legend 2>/dev/null | grep -w running | head -5 | sed 's/^/    /'
+    } >> "$prog"
+    sync "$kmsg" "$jrnl" "$prog"
+    sleep 1
+done
+echo "done: alive at $(cut -d' ' -f1 /proc/uptime) s" >> "$prog"
+wait
+sync "$kmsg" "$jrnl" "$prog"

@@ -1,0 +1,12 @@
+# D-Link DWM-222W (ASR 1286:4e31): let `option` serve its AT ports, then turn its radio on.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1286", ATTR{idProduct}=="4e31", \
+  RUN+="/sbin/modprobe option", \
+  RUN+="/bin/sh -c 'echo 1286 4e31 ff > /sys/bus/usb-serial/drivers/option1/new_id 2>/dev/null || true'", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="rascar-4g-radio.service"
+
+# SIMCom SIM7600E-H (QMI): rascar-4g-qmi runs while its QMI port exists (the
+# service BindsTo dev-cdc\x2dwdm0.device). On the QMI port, not the USB device:
+# cdc-wdm0 appears only once qmi_wwan has bound. No ACTION filter: the systemd
+# tag must be on every event or a "change" leaves the device unit unplugged.
+SUBSYSTEM=="usbmisc", KERNEL=="cdc-wdm0", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", \
+  TAG+="systemd", ENV{SYSTEMD_WANTS}+="rascar-4g-qmi.service"

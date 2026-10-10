@@ -1,0 +1,121 @@
+--- a/drivers/net/usb/cdc_ncm.c
++++ b/drivers/net/usb/cdc_ncm.c
+@@ -62,11 +62,32 @@
+ module_param(prefer_mbim, bool, 0644);
+ MODULE_PARM_DESC(prefer_mbim, "Prefer MBIM setting on dual NCM/MBIM functions");
+ 
++/* RasCar: hold the bind off while userspace authenticates over iAP2.
++ *
++ * Measured over 42 enumerated CarPlay attempts against a Jaguar head unit
++ * (Harman/QNX "Gadget MFi v0.1", 8086:9999): in 14 of them this driver's first
++ * class requests landed while the head unit's gadget was still initialising, and
++ * either the bind failed ("bind() failure") or the port was disabled by the hub
++ * 1-12 ms later ("disabled by hub (EMI?)") and the attempt was lost. A shipping
++ * CarPlay dongle avoids exactly this by not loading cdc_ncm until its iAP2
++ * session is up. This module is resident, so instead: while set, bind declines
++ * before touching the device at all; userspace clears it after authentication
++ * and binds explicitly through /sys/bus/usb/drivers/cdc_ncm/bind.
++ */
++static bool hold_apple_gadget;
++module_param(hold_apple_gadget, bool, 0644);
++MODULE_PARM_DESC(hold_apple_gadget,
++		 "Decline to bind (touching nothing) until cleared; RasCar clears it after iAP2 authentication");
++
+ static void cdc_ncm_txpath_bh(struct tasklet_struct *t);
+ static void cdc_ncm_tx_timeout_start(struct cdc_ncm_ctx *ctx);
+ static enum hrtimer_restart cdc_ncm_tx_timer_cb(struct hrtimer *hr_timer);
+ static struct usb_driver cdc_ncm_driver;
+ 
++/* Apple/CarPlay gadget NTB ceilings, matching the CarlinKit dongle's cdc_ncm. */
++#define CDC_NCM_IPHONE_NTB_MAX_SIZE_RX	12288
++#define CDC_NCM_IPHONE_NTB_MAX_SIZE_TX	15224
++
+ struct cdc_ncm_stats {
+ 	char stat_string[ETH_GSTRING_LEN];
+ 	int sizeof_stat;
+@@ -706,10 +727,17 @@
+ 	/* be conservative when selecting initial buffer size to
+ 	 * increase the number of hosts this will work for
+ 	 */
+-	def_rx = min_t(u32, CDC_NCM_NTB_DEF_SIZE_RX,
++	/*
++	 * RasCar: Apple gadgets are driven with these NTB ceilings by the CarlinKit
++	 * dongle's own cdc_ncm ("Using iphone maximum receive length"). Upstream's
++	 * generic defaults are larger and are not what a shipping CarPlay product
++	 * negotiates with this class of device.
++	 */
++	def_rx = min_t(u32, CDC_NCM_IPHONE_NTB_MAX_SIZE_RX,
+ 		       le32_to_cpu(ctx->ncm_parm.dwNtbInMaxSize));
+-	def_tx = min_t(u32, CDC_NCM_NTB_DEF_SIZE_TX,
++	def_tx = min_t(u32, CDC_NCM_IPHONE_NTB_MAX_SIZE_TX,
+ 		       le32_to_cpu(ctx->ncm_parm.dwNtbOutMaxSize));
++	dev_info(&dev->intf->dev, "RasCar: iPhone NTB max rx/tx=%u/%u\n", def_rx, def_tx);
+ 
+ 	/* clamp rx_max and tx_max and inform device */
+ 	cdc_ncm_update_rxtx_max(dev, def_rx, def_tx);
+@@ -925,7 +953,25 @@
+ 	 * empirically on a Sierra Wireless MC7455 running 02.08.02.00
+ 	 * firmware.
+ 	 */
+-	usleep_range(10000, 20000);
++	/*
++	 * RasCar 2026-09-20: Apple CarPlay gadgets need FAR longer here than the
++	 * upstream value, which the comment above says was tuned empirically on a
++	 * Sierra Wireless modem.
++	 *
++	 * Evidence (usbmon, boot-20260920-195012 run 001): the head unit's gadget
++	 * enumerated, SET_CONFIGURATION completed with status 0 at t=0.574 s, then
++	 * cdc_ncm issued its SET_INTERFACE burst at 0.586/0.589/0.614 — and the very
++	 * next control transfer failed with -71 (EPROTO) at 0.619, after which the
++	 * device dropped off the bus and its re-enumeration could no longer be
++	 * configured ("can't set config #1, error -71"). The gadget faults when the
++	 * alt-setting switch arrives too soon after configuration.
++	 *
++	 * 220 ms is the value the CarlinKit dongle's own patched cdc_ncm uses
++	 * ("Delay load NCM"), and that is a shipping product which sustains these
++	 * sessions.
++	 */
++	dev_info(&intf->dev, "RasCar: delaying NCM bind for Apple gadget\n");
++	msleep(220);
+ 
+ 	/* configure data interface */
+ 	temp = usb_set_interface(dev->udev, iface_no, data_altsetting);
+@@ -947,8 +993,14 @@
+ 	if (ctx->ether_desc) {
+ 		temp = usbnet_get_ethernet_addr(dev, ctx->ether_desc->iMACAddress);
+ 		if (temp) {
+-			dev_err(&intf->dev, "failed to get mac address\n");
+-			goto error2;
++			/*
++			 * RasCar: some CarPlay head units point iMACAddress at a
++			 * non-MAC string. Use a random locally administered address
++			 * instead of refusing to bind.
++			 */
++			eth_hw_addr_random(dev->net);
++			dev_warn(&intf->dev, "invalid mac address string, using random %pM\n",
++				 dev->net->dev_addr);
+ 		}
+ 		dev_info(&intf->dev, "MAC-Address: %pM\n", dev->net->dev_addr);
+ 	}
+@@ -1066,6 +1118,12 @@
+ 
+ static int cdc_ncm_bind(struct usbnet *dev, struct usb_interface *intf)
+ {
++	/* RasCar: see hold_apple_gadget. Return before any bus traffic. */
++	if (READ_ONCE(hold_apple_gadget)) {
++		dev_info(&intf->dev, "RasCar: bind held (hold_apple_gadget=1), device untouched\n");
++		return -ENODEV;
++	}
++
+ 	/* MBIM backwards compatible function? */
+ 	if (cdc_ncm_select_altsetting(intf) != CDC_NCM_COMM_ALTSETTING_NCM)
+ 		return -ENODEV;
+@@ -2133,3 +2191,8 @@
+ MODULE_AUTHOR("Hans Petter Selasky");
+ MODULE_DESCRIPTION("USB CDC NCM host driver");
+ MODULE_LICENSE("Dual BSD/GPL");
++
++/* RasCar: version stamp so the debug runner can tell a freshly-patched module
++ * from an older patched one already loaded (module taint alone cannot). */
++#define RASCAR_NCM_VERSION "rascar-3"
++MODULE_VERSION(RASCAR_NCM_VERSION);

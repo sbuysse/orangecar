@@ -1,0 +1,15 @@
+[Unit]
+Description=RasCar 4G: dial and keep up the QMI data link (SIMCom SIM7600)
+# Started by udev when the modem's QMI port appears (90-rascar-4g.rules),
+# stopped when it disappears: nothing runs while no modem is plugged.
+BindsTo=dev-cdc\x2dwdm0.device
+After=dev-cdc\x2dwdm0.device systemd-networkd.service systemd-resolved.service
+
+[Service]
+Type=simple
+# Optional APN=... (empty = the network's default); see docs/configuration.md.
+EnvironmentFile=-/etc/rascar/4g.env
+ExecStart=/usr/local/sbin/rascar-4g-qmi
+ExecStopPost=/bin/sh -c 'mkdir -p /run/rascar && echo "no modem" > /run/rascar/4g.status && chmod 644 /run/rascar/4g.status'
+Restart=on-failure
+RestartSec=10

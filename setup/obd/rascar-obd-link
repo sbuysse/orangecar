@@ -1,0 +1,135 @@
+#!/bin/bash
+# rascar-obd-link — find, pair and bind the car's Bluetooth ELM327 to /dev/rfcomm0.
+#
+# rascar-app reads OBD-II from /dev/rfcomm0 (its --obd-port default) and retries
+# until it exists; nothing created it. The adapter lives in the car, so this has
+# to work unattended at every boot:
+#   1. adapter address: $OBD_MAC, else the one chosen in the dashboard
+#      (Settings ▸ Bluetooth, `obd_device` in $SETTINGS), else the one
+#      remembered in $STATE, else scan for a device whose NAME looks like an
+#      OBD adapter (never pairs anything else) and remember it;
+#   2. pair + trust it (bt-agent answers the legacy PIN from $PINS: the
+#      dashboard's `obd_pin` if set, then 1234, 0000);
+#   3. `rfcomm bind` it to /dev/rfcomm0 (lazy: the RF link opens when rascar-app
+#      opens the port), and re-bind whenever the node disappears.
+# Classic Bluetooth (SPP) adapters only; BLE-only adapters have no RFCOMM.
+set -u
+
+STATE=/var/lib/rascar/obd.mac
+# The dashboard's settings.json (RASCAR_HOME comes from /etc/rascar/install.env,
+# loaded by the unit).
+SETTINGS=${RASCAR_SETTINGS:-${RASCAR_HOME:-/nonexistent}/.config/rascar/settings.json}
+STATUS=/run/rascar/obd-link.status   # one line for the dashboard
+PINS=/etc/rascar/obd-pins
+DEV=0
+CHANNEL=${OBD_CHANNEL:-1}
+NAME_RE='OBD|ELM|V-?LINK|VGATE|KONNWEI|VEEPEAK|CARISTA|OBDLINK'
+SCAN_SECONDS=20
+IDLE_RETRY=60     # nothing found / not in range (e.g. at home): look again later
+
+log() { echo "rascar-obd-link: $*" >&2; }   # stderr: stdout carries find_adapter's result
+status() { mkdir -p "$(dirname "$STATUS")"; printf '%s\n' "$*" > "$STATUS.tmp" && mv "$STATUS.tmp" "$STATUS"; chmod 644 "$STATUS"; }
+
+# `obd_device` / `obd_pin` from the dashboard's settings.json ("" when unset).
+setting() {
+    python3 -c 'import json,sys
+try: v=json.load(open(sys.argv[1])).get(sys.argv[2])
+except Exception: v=None
+print(v if isinstance(v,str) else "")' "$SETTINGS" "$1" 2>/dev/null
+}
+valid_mac() { echo "$1" | grep -Eq '^([0-9A-F]{2}:){5}[0-9A-F]{2}$'; }
+valid_pin() { echo "$1" | grep -Eq '^[0-9]{1,16}$'; }
+
+mkdir -p "$(dirname "$STATE")" /etc/rascar
+[ -f "$PINS" ] || printf '* 1234\n' > "$PINS"      # bt-agent PIN file: "<MAC|*> <PIN>"
+chmod 600 "$PINS"
+
+# The controller only registers ~1 min after boot (btusb), and bluetoothd starts
+# after it; a bt-agent started earlier aborts and was never restarted, so no
+# adapter could ever pair (2026-09-29: "Aborted bt-agent" at every boot).
+wait_controller() {
+    local said=
+    until bluetoothctl show 2>/dev/null | grep -q '^Controller '; do
+        [ -n "$said" ] || { log "waiting for the Bluetooth controller"; status "waiting for Bluetooth"; said=1; }
+        sleep 3
+    done
+    bluetoothctl power on >/dev/null 2>&1
+}
+
+# Default agent that answers PIN requests during pairing (legacy ELM327 PIN),
+# restarted whenever it has died (bluetoothd restart, controller reset).
+AGENT=
+ensure_agent() {
+    if [ -n "$AGENT" ] && kill -0 "$AGENT" 2>/dev/null; then return; fi
+    [ -z "$AGENT" ] || log "bt-agent (pid $AGENT) had exited — restarting it"
+    bt-agent -c NoInputNoOutput -p "$PINS" >/dev/null 2>&1 &
+    AGENT=$!
+}
+trap 'kill $AGENT 2>/dev/null; rfcomm release $DEV 2>/dev/null' EXIT
+
+find_adapter() {
+    log "scanning ${SCAN_SECONDS}s for an OBD adapter (names matching $NAME_RE)"
+    bluetoothctl --timeout "$SCAN_SECONDS" scan on >/dev/null 2>&1
+    bluetoothctl devices | while read -r _ mac name; do
+        if echo "$name" | grep -Eiq "$NAME_RE"; then echo "$mac $name"; break; fi
+    done
+}
+
+pair_adapter() {   # $1 = MAC
+    if bluetoothctl info "$1" 2>/dev/null | grep -q "Paired: yes"; then return 0; fi
+    local custom; custom=$(setting obd_pin); valid_pin "$custom" || custom=
+    for pin in $custom 1234 0000; do
+        printf '* %s\n' "$pin" > "$PINS"
+        log "pairing $1 (PIN $pin)"
+        if timeout 30 bluetoothctl pair "$1" 2>&1 | grep -qiE "Pairing successful|AlreadyExists"; then
+            bluetoothctl trust "$1" >/dev/null 2>&1
+            return 0
+        fi
+    done
+    printf '* 1234\n' > "$PINS"
+    return 1
+}
+
+bound=
+while true; do
+    wait_controller
+    ensure_agent
+    want="$(setting obd_device)|$(setting obd_pin)"
+    chosen=$(setting obd_device | tr a-f A-F); valid_mac "$chosen" || chosen=
+    mac=${OBD_MAC:-${chosen:-$(cat "$STATE" 2>/dev/null)}}
+    if [ -z "$mac" ]; then
+        status "searching"
+        found=$(find_adapter)
+        if [ -z "$found" ]; then status "not found"; sleep "$IDLE_RETRY"; continue; fi
+        mac=${found%% *}
+        log "found ${found#* } at $mac"
+    fi
+    # Another adapter chosen in the dashboard: drop the old binding.
+    if [ -n "$bound" ] && [ "$bound" != "$mac" ]; then
+        log "adapter changed $bound -> $mac"
+        rfcomm release "$DEV" >/dev/null 2>&1
+        bound=
+    fi
+    if ! pair_adapter "$mac"; then
+        log "could not pair $mac (out of range, or another PIN?) — retrying in ${IDLE_RETRY}s"
+        status "pairing failed $mac"
+        # Wake early when the dashboard's choice changes.
+        for _ in $(seq $((IDLE_RETRY / 5))); do
+            sleep 5
+            [ "$(setting obd_device)|$(setting obd_pin)" = "$want" ] || break
+        done
+        continue
+    fi
+    [ "$(cat "$STATE" 2>/dev/null)" = "$mac" ] || { echo "$mac" > "$STATE"; log "remembered $mac in $STATE"; }
+    if [ ! -e "/dev/rfcomm$DEV" ] || [ -z "$bound" ]; then
+        rfcomm release "$DEV" >/dev/null 2>&1
+        if rfcomm bind "$DEV" "$mac" "$CHANNEL"; then
+            log "bound /dev/rfcomm$DEV -> $mac channel $CHANNEL"
+            status "bound $mac"; bound=$mac
+        else
+            log "rfcomm bind failed for $mac"
+            status "bind failed $mac"
+        fi
+    fi
+    sleep 10
+done

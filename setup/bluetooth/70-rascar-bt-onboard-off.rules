@@ -1,0 +1,14 @@
+# Turn off the on-board Bluetooth controller so the USB dongle is the only one.
+#
+# The RTL8852BE M.2 card exposes its Bluetooth half as USB 0489:e123 (behind the
+# GL hub). This board has no antennas fitted on it: measured 2026-10-05 it hears
+# a nearby beacon at -102 dBm where the TP-Link UB500 dongle (2357:0604,
+# RTL8761BU) hears the same beacon at -62 dBm, and it never found the car's OBD
+# adapter. With both controllers up, bluetoothctl / rfcomm pick whichever is
+# "first", and hci0/hci1 swap with enumeration order between boots.
+#
+# Matching on the USB id (not on the hciN index) keeps the choice stable.
+# De-authorizing the USB device detaches btusb from it; the Wi-Fi half of the
+# card is on PCIe and is not affected. To bring it back for a test:
+#   echo 1 | sudo tee /sys/bus/usb/devices/<port>/authorized
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0489", ATTR{idProduct}=="e123", ATTR{authorized}="0"

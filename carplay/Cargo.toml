@@ -1,0 +1,70 @@
+[package]
+name = "rascar-carplay"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rascar-carplay"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime — ep0 event loop uses tokio::fs for the FFS control endpoint.
+tokio = { workspace = true }
+# Error handling + logging (mirrors bridge).
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# CLI (--debug flag).
+clap = { workspace = true }
+# Linux syscalls / USB gadget via configfs + FunctionFS.
+nix = { workspace = true }
+libc = { workspace = true }
+# Multicast + SO_REUSEPORT for the _carplay-ctrl mDNS responder (host/ctrl_advertise.rs):
+# coexist with avahi-daemon on UDP 5353 and answer authoritatively with no probe delay.
+socket2 = { version = "0.6", features = ["all"] }
+# iAP2 stack (Phase 2): byte buffers, hex logging, error + async traits.
+# NOTE: the iAP2 code is derived from usenocturne/iap2-rs (GPL-3), so this crate
+# is GPL-3. See src/iap2/mod.rs.
+bytes = { workspace = true }
+hex = "0.4"
+thiserror = "1"
+async-trait = "0.1"
+nusb = { version = "0.2.5", features = ["tokio"] }
+# Parses rascar-app's /api/media JSON for the iAP2 NowPlaying stream
+# (src/iap2/nowplaying.rs). Already in the workspace lockfile via app/.
+serde_json = { workspace = true }
+# Wayland dashboard capture (stream/wlcapture.rs): wlr-screencopy client.
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+memmap2 = "0.9"
+
+# --- Phase 4: AirPlay/CarPlay control + FairPlay SAP ---
+# Ported from doubletake (LGPL-3). See src/airplay/mod.rs for the licensing note.
+# Binary-plist encode/decode for RTSP SETUP/info bodies.
+plist = "1.7"
+# SRP-6a big-integer math (Apple HAP SRP is hand-rolled, not the `srp` crate's flavour).
+num-bigint = "0.4"
+# Pairing identity + signatures.
+ed25519-dalek = "2"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# HAP frame + pairing AEAD, key derivation.
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+# FairPlay key unwrap (standard AES-128 block) + raw pair-verify (AES-128-CTR).
+aes = "0.8"
+ctr = "0.9"
+
+# --- Phase 5: dashboard capture + AirPlay video/audio sender + touch return ---
+# X11 XTest touch injection into the Xvfb/Chromium dashboard (copied uinput+XTest
+# injector from bridge/src/media/input.rs). Framebuffer path uses nix+libc above.
+x11rb = { version = "0.13", features = ["xtest"] }
+
+[dev-dependencies]
+tempfile = "3"
+# `test-util` gives tests a PAUSED clock, so a test that must prove a 10 s
+# timeout actually elapses runs in microseconds instead of blocking the suite
+# for 10 real seconds. Not implied by tokio's "full" feature.
+tokio = { workspace = true, features = ["test-util"] }

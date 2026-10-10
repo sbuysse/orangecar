@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="google" content="notranslate">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no">
+    <title>Android Auto</title>
+    <!-- Shown inside the dashboard's app frame (services/apps.rs "androidauto").
+         The phone's screen arrives as H.264 from rascar-aa over a WebSocket and is
+         decoded here with WebCodecs; touches go back the same way. -->
+    <script src="/js/kiosklog.js?v=20261005"></script>
+    <link rel="stylesheet" href="/vendor/font-awesome/css/all.min.css">
+    <style>
+        @font-face {
+            font-family: 'Manrope';
+            src: url('/vendor/fonts/manrope-latin-var.woff2') format('woff2');
+            font-weight: 400 700; font-style: normal; font-display: swap;
+        }
+        :root {
+            --bg: #040509;
+            --text: #e9edf6;
+            --muted: #8d95b3;
+            --accent: #00d4ff;
+            --danger: #ff5b6e;
+        }
+        html, body {
+            margin: 0; height: 100%; overflow: hidden;
+            background: var(--bg); color: var(--text);
+            font-family: 'Manrope', system-ui, sans-serif;
+            user-select: none; -webkit-user-select: none;
+        }
+        #stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+        /* Sized from JS to the content's aspect ratio (letterboxed, never stretched). */
+        #screen { display: block; touch-action: none; background: #000; visibility: hidden; }
+        #screen.live { visibility: visible; }
+        #overlay {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px;
+            background: var(--bg);
+        }
+        #overlay.hidden { display: none; }
+        #overlay i { font-size: 54px; color: var(--accent); }
+        #overlay.error i { color: var(--danger); }
+        #title { font-size: 24px; font-weight: 700; }
+        #detail { font-size: 16px; color: var(--muted); max-width: 640px; line-height: 1.4; white-space: pre-line; }
+        #stats {
+            position: absolute; right: 8px; top: 8px; padding: 4px 8px; border-radius: 6px;
+            background: rgba(0, 0, 0, 0.6); color: var(--muted); font: 12px/1.3 monospace; pointer-events: none;
+        }
+        #stats.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="stage"><canvas id="screen" width="1280" height="530"></canvas></div>
+    <div id="overlay">
+        <i id="icon" class="fab fa-android"></i>
+        <div id="title">Android Auto</div>
+        <div id="detail">Starting…</div>
+    </div>
+    <div id="stats" class="hidden"></div>
+    <script src="/js/aa.js?v=20261005"></script>
+</body>
+</html>

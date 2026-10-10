@@ -1,0 +1,181 @@
+#!/bin/bash
+# rascar-4g-qmi — bring up and keep up the data link of a QMI 4G modem
+# (SIMCom SIM7600E-H, USB 1e0e:9001: qmi_wwan netdev + /dev/cdc-wdm0).
+#
+# qmi_wwan only registers the netdev; nothing dials. Steps, then a watchdog:
+#   1. find the netdev behind /dev/cdc-wdmN, switch it to raw-IP (what the
+#      modem's WDA data format says) and bring it up;
+#   2. start a WDS session (APN from $APN, default: the network's own);
+#   3. apply the address the network assigned, with a LOW-PRIORITY default
+#      route (metric 2048) so a LAN / Wi-Fi uplink stays preferred — a 4G
+#      stick taking the default route once cut the Pi off (2026-09-28);
+#   4. every 20 s check the packet service status and redial when it drops.
+# Started by udev when the modem's /dev/cdc-wdmN appears and stopped by systemd
+# when it goes away (rascar-4g-qmi.service BindsTo the device): no waiting loop
+# for an absent modem, and no qmicli left on a device that vanished.
+# The 20 s check stays: the network can drop the data session without the
+# kernel seeing anything; one short qmicli call is ~0.1 % of a core.
+# Read-only on the modem apart from the WDS session; never touches CFUN/SIM.
+set -u
+WDM=${WDM:-/dev/cdc-wdm0}
+APN=${APN:-}
+METRIC=2048
+STATUS=/run/rascar/4g.status   # one line for the dashboard
+log() { echo "rascar-4g-qmi: $*" >&2; }
+# Every change of state is logged: on 2026-10-01 the loop sat on "waiting for
+# network" for half an hour without a single journal line.
+status() {
+    [ "$(cat "$STATUS" 2>/dev/null)" = "$*" ] && return
+    log "status: $*"
+    mkdir -p "$(dirname "$STATUS")"; printf '%s\n' "$*" > "$STATUS.tmp" && mv "$STATUS.tmp" "$STATUS"; chmod 644 "$STATUS"
+}
+# qmicli directly on the device, one call at a time (flock), NOT through
+# qmi-proxy: on 2026-09-29 the proxy got stuck spinning at 100 % CPU and every
+# call timed out until it was killed. Opening can still time out: retry.
+# `-k 5`: a wedged qmicli ignores timeout's SIGTERM (seen 2026-09-29, spinning
+# at 90 % CPU for 10+ min while holding the lock), so follow up with SIGKILL.
+LOCK=/run/rascar/qmi.lock
+q() {
+    local out i
+    mkdir -p "$(dirname "$LOCK")"
+    for i in 1 2 3; do
+        out=$(flock -w 30 "$LOCK" timeout -k 5 25 qmicli -d "$WDM" "$@" 2>&1)
+        echo "$out" | grep -q "couldn't open the QmiDevice\|CID allocation failed" || break
+        sleep 2
+    done
+    echo "$out"
+}
+
+# A USB error on the stick (`qmi_wwan: Unexpected error -71`, seen at ~17 s on
+# 2026-10-01 together with a hub TT-error storm) can wedge the QMI channel: every
+# call then times out or receives the previous call's late answer
+# ("CID allocation failed … Service mismatch (requested 'nas', got 'wds')").
+# It never recovers on its own; a USB bus reset of the stick does (redialled
+# 16 s later). The reset re-enumerates cdc-wdm, which stops this service
+# (BindsTo) and udev starts it again, so it runs in a transient unit that our
+# stop cannot kill. At most one reset per RESET_MIN_GAP seconds.
+WEDGE_RE="Transaction timed out|Service mismatch|endpoint hangup|couldn't create client"
+WEDGE_LIMIT=3
+RESET_MIN_GAP=120
+RESET_STAMP=/run/rascar/4g.lastreset
+wedged=0
+# The data path can wedge on its own (once 2 min after a
+# recovery): QMI still answers and link/route look fine, but every packet sits
+# in the queue and the kernel's NETDEV WATCHDOG fires. Its per-queue counter is
+# the cheap, exact signal.
+tx_timeouts() { cat "/sys/class/net/$1/queues/tx-0/tx_timeout" 2>/dev/null || echo 0; }
+tx_seen=""
+usb_dev() { basename "$(dirname "$(readlink -f "/sys/class/usbmisc/$(basename "$WDM")/device")")"; }
+reset_stick() {
+    local why=$1 now last dev
+    now=$(date +%s); last=$(cat "$RESET_STAMP" 2>/dev/null || echo 0)
+    if [ $((now - last)) -lt "$RESET_MIN_GAP" ]; then return 1; fi
+    dev=$(usb_dev)
+    [ -n "$dev" ] && [ -e "/sys/bus/usb/devices/$dev/busnum" ] || { log "cannot find the USB device behind $WDM"; return 1; }
+    echo "$now" > "$RESET_STAMP"
+    status "modem reset"
+    log "$why - USB reset of $dev"
+    systemd-run --quiet --collect --unit="rascar-4g-usbreset-$now" \
+        /usr/bin/usbreset "$(printf '%03d/%03d' "$(cat "/sys/bus/usb/devices/$dev/busnum")" "$(cat "/sys/bus/usb/devices/$dev/devnum")")"
+}
+
+netdev() { ls "/sys/class/usbmisc/$(basename "$WDM")/device/net/" 2>/dev/null | head -1; }
+
+# udev renames the netdev (wwan0 -> wwu1u4i5) after cdc-wdm appears. Dialing
+# before that lost the race on 2026-09-30: the address landed, the rename then
+# left the link DOWN with no route, and the loop kept reporting "connected".
+# /run/udev/data/n<ifindex> exists once udev has finished with the netdev.
+udev_done() {
+    local idx
+    idx=$(cat "/sys/class/net/$1/ifindex" 2>/dev/null) || return 1
+    [ -e "/run/udev/data/n$idx" ]
+}
+
+# Packet-switched attach is what start-network needs. At power-on the SIM7600
+# attaches ~10-25 s after it enumerates; a dial before that is refused, and the
+# old fixed 20 s retry turned a refused first dial into a 38 s connection.
+ps_attached() { q --nas-get-serving-system | grep -q "PS: 'attached'"; }
+
+# Usable = link UP and our default route on it; an address alone is not enough.
+link_ok() {
+    ip link show dev "$1" up 2>/dev/null | grep -q . \
+        && ip -4 addr show dev "$1" | grep -q inet \
+        && ip route show default dev "$1" | grep -q .
+}
+
+field() { awk -F': ' -v k="$1" '$0 ~ k {gsub(/'\''/,"",$2); print $2; exit}'; }
+
+dial() {
+    local dev=$1 out cid
+    ip link set "$dev" down
+    echo Y > "/sys/class/net/$dev/qmi/raw_ip"
+    ip link set "$dev" up
+    out=$(q --wds-start-network="${APN:+apn='$APN',}ip-type=4" --client-no-release-cid)
+    if ! echo "$out" | grep -q "Packet data handle"; then
+        log "start-network failed: $(echo "$out" | grep -m1 -iE "error|reason" || echo "$out" | tail -1)"
+        # --client-no-release-cid kept the WDS client even though no call
+        # exists: release it, or every failed dial leaks one of the modem's CIDs.
+        cid=$(echo "$out" | field "CID")
+        [ -n "$cid" ] && q --wds-noop --client-cid="$cid" >/dev/null
+        return 1
+    fi
+    apply "$dev"
+}
+
+# Configure the address the network assigned (also after the netdev lost it
+# while the modem session stayed up: no new dial needed then).
+apply() {
+    local dev=$1 out ip mask gw dns1 dns2 pfx
+    out=$(q --wds-get-current-settings)
+    ip=$(echo "$out" | field "IPv4 address"); mask=$(echo "$out" | field "IPv4 subnet mask")
+    gw=$(echo "$out" | field "IPv4 gateway address")
+    dns1=$(echo "$out" | field "IPv4 primary DNS"); dns2=$(echo "$out" | field "IPv4 secondary DNS")
+    [ -n "$ip" ] && [ -n "$gw" ] || { log "no IPv4 settings: $(echo "$out" | tail -1)"; return 1; }
+    pfx=$(python3 -c "import ipaddress,sys;print(ipaddress.IPv4Network('0.0.0.0/'+sys.argv[1]).prefixlen)" "$mask")
+    ip link set "$dev" up || { log "cannot bring $dev up"; return 1; }
+    ip addr flush dev "$dev"
+    ip addr add "$ip/$pfx" dev "$dev" || { log "cannot add $ip/$pfx to $dev"; return 1; }
+    ip route replace default via "$gw" dev "$dev" metric "$METRIC" \
+        || { log "cannot add the default route via $gw on $dev"; return 1; }
+    resolvectl dns "$dev" $dns1 $dns2 2>/dev/null
+    log "connected on $dev: $ip/$pfx via $gw (metric $METRIC)"
+    status "connected $dev $ip"
+}
+
+while true; do
+    [ -e "$WDM" ] || { log "$WDM is gone"; exit 0; }
+    dev=$(netdev)
+    # The netdev registers together with cdc-wdm; if it is missing, let systemd retry.
+    [ -n "$dev" ] || { log "no netdev behind $WDM"; exit 1; }
+    udev_done "$dev" || { status "waiting for udev"; sleep 1; continue; }
+    pss=$(q --wds-get-packet-service-status)
+    if echo "$pss" | grep -qE "$WEDGE_RE"; then
+        wedged=$((wedged + 1))
+        if [ "$wedged" -ge "$WEDGE_LIMIT" ]; then
+            reset_stick "QMI wedged ($wedged calls in a row)" && { sleep 30; continue; }
+        fi
+        status "modem not answering"; sleep 2; continue
+    fi
+    wedged=0
+    if ! echo "$pss" | grep -q "'connected'"; then
+        if ! ps_attached; then
+            status "waiting for network"; sleep 1; continue
+        fi
+        status "dialing"
+        dial "$dev" || { status "dial failed"; sleep 3; continue; }
+    elif ! link_ok "$dev"; then
+        log "session up but $dev is down or has no address/route — re-applying it"
+        apply "$dev" || { status "dial failed"; sleep 20; continue; }
+    else
+        now_to=$(tx_timeouts "$dev")
+        if [ -n "$tx_seen" ] && [ "$now_to" -gt "$tx_seen" ]; then
+            log "$dev transmit queue stalled ($((now_to - tx_seen)) watchdog timeouts) - data path wedged"
+            tx_seen=$now_to
+            reset_stick "data path wedged" && { sleep 30; continue; }
+        fi
+        tx_seen=$now_to
+        # A session we did not dial (service restart) must still be reported.
+        status "connected $dev $(ip -4 -o addr show "$dev" | awk '{split($4,a,"/"); print a[1]; exit}')"
+    fi
+    sleep 20
+done

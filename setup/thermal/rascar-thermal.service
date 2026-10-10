@@ -1,0 +1,13 @@
+[Unit]
+Description=RasCar thermal guard: throttle the CPU in steps (the board has no fan)
+DefaultDependencies=no
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/rascar-thermal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

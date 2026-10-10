@@ -1,0 +1,6 @@
+# The Wayland kiosk (cage, RASCAR_COMPOSITOR=wayland) takes every libinput
+# device. The Orange Pi's IR receiver declares relative X/Y axes, so the
+# compositor believed a mouse was plugged in and painted a pointer into the
+# frames streamed to the car (headless output = software cursor). Touch comes
+# from the uinput "RasCar CarPlay Touchscreen"; nothing uses the IR receiver.
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="gpio_ir_recv", ENV{LIBINPUT_IGNORE_DEVICE}="1"

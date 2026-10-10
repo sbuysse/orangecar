@@ -1,0 +1,10 @@
+# RasCar: keep the kernel name (usb0) for the car's CDC-NCM link.
+# udev renamed usb0 -> enu1i1 up to 4.8 s after the netif appeared, "while UP",
+# after rascar-carplay had already configured usb0 -> NCM bring-up stalled.
+# Only cdc_ncm matches: the r8169 Ethernet (SSH) and rtw89 Wi-Fi keep their names.
+[Match]
+Driver=cdc_ncm
+
+[Link]
+NamePolicy=kernel
+MACAddressPolicy=none

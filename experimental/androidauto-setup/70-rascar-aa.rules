@@ -1,0 +1,20 @@
+# rascar-aa (Android Auto head unit) runs as the desktop user and must open
+# the phone on a USB host port: first in its normal mode, to send the Android
+# Open Accessory switch, then as the accessory (Google 18d1:2d00 / 2d01).
+# Install: sudo cp 70-rascar-aa.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+# Add your phone's vendor id here if it is not listed (lsusb shows it).
+
+# Accessory mode (any phone after the switch)
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", ATTR{idProduct}=="2d0[0-5]", MODE="0660", GROUP="plugdev"
+
+# Phones in normal mode: Google, Samsung, Xiaomi, OnePlus, Motorola, Huawei, Sony, OPPO/Realme, LG, Nothing
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="18d1", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="04e8", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2717", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2a70", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="22b8", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="12d1", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0fce", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="22d9", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1004", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2b0e", MODE="0660", GROUP="plugdev"

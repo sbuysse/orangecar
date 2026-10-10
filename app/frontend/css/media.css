@@ -1,0 +1,311 @@
+/* ── Fullscreen Media Overlay ─────────────────────────────────── */
+#media-fullscreen {
+    position: fixed; inset: 0;
+    background: var(--bg-hero);
+    z-index: 150; /* above #status-bar (100) so the bar can't paint over fullscreen media */
+    display: none;
+    flex-direction: column;
+}
+#media-fullscreen.active { display: flex; }
+
+/* Visualizer fills entire background */
+#fs-viz-canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+}
+
+/* Top row: album art left, control buttons right */
+.fs-top {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 22px 26px;
+    z-index: 2;
+    transition: opacity 0.3s;
+}
+
+/* Bottom row: song info + transport controls */
+.fs-bottom {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(transparent, color-mix(in srgb, var(--bg-primary) 92%, transparent));
+    padding: 30px 32px 22px;
+    z-index: 2;
+    transition: opacity 0.3s;
+}
+
+/* Auto-hide fades the buttons, never the playing track's artwork; while hidden
+   the whole top row lets taps through, so a tap on the art shows the controls. */
+.fs-ctrl-grid { transition: opacity 0.3s; }
+.fs-controls-hidden .fs-ctrl-grid,
+.fs-controls-hidden .fs-bottom { opacity: 0; pointer-events: none; }
+.fs-controls-hidden .fs-top { pointer-events: none; }
+
+/* Album art with glow */
+.fs-album-container {
+    position: relative; width: 210px; height: 210px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+}
+.fs-album-glow {
+    position: absolute; width: 240px; height: 240px; border-radius: 50%;
+    background: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 70%);
+}
+.fs-album-art {
+    position: relative; width: 180px; height: 180px; border-radius: 26px;
+    background: var(--bg-secondary);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    box-shadow: 0 0 40px color-mix(in srgb, var(--accent) 25%, transparent);
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden; z-index: 1;
+}
+.fs-album-art img { width: 100%; height: 100%; object-fit: cover; }
+.fs-album-art i { font-size: 64px; color: var(--accent); }
+
+/* Visualizer overlay behind the album art */
+.fs-viz-behind-album {
+    position: absolute; width: 210px; height: 210px; border-radius: 30px;
+    overflow: hidden; display: flex; align-items: flex-end;
+    justify-content: center; gap: 2px; padding: 4px;
+}
+
+/* Control circle buttons (top-right) */
+.fs-ctrl-grid { display: flex; flex-wrap: wrap; gap: 10px; max-width: 260px; justify-content: flex-end; } /* 4 per row: 7 buttons stay on 2 rows */
+.fs-ctrl-btn {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border: 1px solid var(--border-strong); color: var(--text-primary); font-size: 19px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s;
+}
+.fs-ctrl-btn:active { background: color-mix(in srgb, var(--text-primary) 12%, transparent); }
+.fs-ctrl-btn.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 80%, transparent); box-shadow: 0 0 20px var(--accent-glow); }
+/* Unavailable control: no existing rule covers a disabled button state. */
+.fs-ctrl-btn:disabled { opacity: 0.3; cursor: default; }
+.fs-ctrl-btn:disabled:active { background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
+
+/* Song info */
+.fs-song-title { font-family: var(--font-display); font-size: 32px; font-weight: 600; letter-spacing: -0.5px; margin-bottom: 2px; }
+.fs-song-artist { font-size: 18px; color: var(--text-secondary); margin-bottom: 12px; }
+
+/* Progress bar */
+.fs-progress { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.fs-progress-bar { flex: 1; height: 2px; background: color-mix(in srgb, var(--text-primary) 10%, transparent); border-radius: 1px; }
+.fs-progress-fill { height: 100%; background: linear-gradient(90deg, transparent, var(--accent)); box-shadow: 0 0 12px var(--accent); border-radius: 1px; width: 0%; }
+.fs-progress-time { font-family: var(--font-display); font-size: 14px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* Transport controls */
+.fs-transport { display: flex; align-items: center; justify-content: center; gap: 24px; }
+.fs-transport-btn {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: transparent; border: 1px solid var(--border-strong);
+    color: var(--text-primary); font-size: 20px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+.fs-transport-btn:active { background: color-mix(in srgb, var(--text-primary) 12%, transparent); }
+.fs-transport-btn.play {
+    width: 88px; height: 88px; font-size: 30px;
+    border-color: color-mix(in srgb, var(--accent) 80%, transparent); background: var(--accent-soft); color: var(--accent);
+    box-shadow: 0 0 36px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 0 22px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.fs-transport-btn.small { width: 52px; height: 52px; font-size: 17px; } /* >=44px in-car touch target */
+.fs-transport-btn.dislike:active { color: var(--danger); }
+.fs-transport-btn.like:active { color: var(--success); }
+
+/* ── Karaoke Overlay ────────────────────────────────────────── */
+#karaoke-overlay {
+    position: absolute; inset: 0;
+    background: color-mix(in srgb, var(--bg-primary) 82%, transparent);
+    z-index: 4;
+    display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column;
+    padding: 40px 32px;
+    cursor: pointer;
+}
+#karaoke-overlay.active { display: flex; }
+.karaoke-lyrics { text-align: center; overflow-y: auto; max-height: 100%; }
+.karaoke-line { font-size: 20px; color: color-mix(in srgb, var(--text-primary) 30%, transparent); margin-bottom: 10px; transition: all 0.3s; }
+.karaoke-line.past { color: color-mix(in srgb, var(--text-primary) 30%, transparent); }
+.karaoke-line.current { font-family: var(--font-display); font-size: 30px; color: var(--accent); font-weight: 600; text-shadow: 0 0 20px var(--accent-glow); }
+.karaoke-line.future { color: color-mix(in srgb, var(--text-primary) 60%, transparent); }
+
+/* ── Playlist / Liked Songs Overlay ─────────────────────────── */
+#playlist-overlay {
+    position: absolute; inset: 0;
+    background: color-mix(in srgb, var(--bg-primary) 95%, transparent);
+    z-index: 5;
+    display: none;
+    flex-direction: column;
+    padding: 16px;
+}
+#playlist-overlay.active { display: flex; }
+
+.playlist-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 12px;
+}
+.playlist-header h3 { font-family: var(--font-display); font-size: 22px; font-weight: 600; }
+
+.playlist-grid {
+    display: grid;
+    /* minmax(0, …): long titles ellipsize instead of widening the columns
+       (the grid scrolled sideways once cards had one-line titles). */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    align-content: start; /* a short list keeps compact rows instead of stretching */
+    gap: 12px;
+    overflow-y: auto;
+    flex: 1;
+}
+/* Card surface + tap affordance folded in from the (never-applied) .track-card
+   ruleset, so every card renderer gets a visible boundary from one class. */
+.playlist-card {
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    padding: 14px 16px; min-height: 64px;
+    cursor: pointer;
+    display: flex; flex-direction: column;
+    gap: 4px;
+}
+.playlist-card:active { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: var(--accent-soft); }
+.playlist-card-title { font-size: 16px; font-weight: 600; }
+.playlist-card-sub { font-size: 14px; color: var(--text-secondary); }
+
+/* ── Search Results Overlay ─────────────────────────────────── */
+#search-overlay {
+    position: absolute; inset: 0;
+    background: color-mix(in srgb, var(--bg-primary) 95%, transparent);
+    z-index: 7;
+    display: none;
+    flex-direction: column;
+    padding: 16px;
+}
+#search-overlay.active { display: flex; }
+
+/* ── Viz mode label ─────────────────────────────────────────── */
+.viz-mode-label {
+    text-align: center;
+    font-size: 12px; font-weight: 600; letter-spacing: 1px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0;
+}
+
+/* ── Album art glow on home page ────────────────────────────── */
+.media-art-glow {
+    position: absolute; width: 100%; height: 100%;
+    border-radius: 12px;
+    box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 20%, transparent);
+    pointer-events: none;
+}
+
+/* ── Control-icon tints, extracted from inline style attributes ───────────
+   Values carried over verbatim; --success/--danger/--accent match the former
+   literals exactly, so nothing renders differently. */
+#fs-karaoke-btn i { color: #FFD54F; }            /* same yellow as .karaoke-line.current */
+#fs-viz-btn i     { color: var(--success); }     /* was #40ff80 */
+#fs-shuffle-btn i { color: #90CAF9; }            /* off-palette one-off, kept as-is */
+#fs-liked-btn i   { color: var(--danger); }      /* was #ff4060 */
+#search-query     { color: var(--accent); }      /* was #00d4ff */
+
+/* Compact variant of .fs-ctrl-btn used by the overlay close buttons; the base
+   rule's 50px circle is too large for a panel header. */
+.fs-ctrl-btn-small { width: 46px; height: 46px; } /* 44px minimum in the car */
+
+/* Groups the "Search Results" heading with its query text. */
+.playlist-header-title { display: flex; align-items: center; gap: 8px; }
+
+/* Transient toast. Was built with an inline style string in JS; moved here so no
+   CSS lives in script. Values carried over verbatim. */
+.media-toast {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    background: var(--bg-secondary); color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    padding: 12px 22px; border-radius: 999px;
+    font-size: 16px; z-index: 9999; pointer-events: none;
+    transition: opacity 0.3s;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+
+/* Search results list artists alongside tracks; only tracks are playable, so the
+   pointer must not promise a tap the artist card does not honour. */
+.playlist-card:not(.playable):not(.playlist-folder) { cursor: default; }
+
+/* Brighter glow once real artwork is loaded. Only the alpha differs from the
+   base .fs-album-glow gradient; previously assigned from script. */
+.fs-album-glow.has-art { background: radial-gradient(circle, color-mix(in srgb, var(--accent) 20%, transparent) 0%, transparent 70%); }
+
+/* Full-width placeholder row inside a .playlist-grid. */
+.grid-message { grid-column: 1 / -1; text-align: center; padding: 40px; }
+
+/* ── Visualizer-only fullscreen (tap the home vumeter) ──────────
+   Same overlay, every media control hidden; tap = next mode. */
+#media-fullscreen.viz-only .fs-top,
+#media-fullscreen.viz-only .fs-bottom,
+#media-fullscreen.viz-only #karaoke-overlay,
+#media-fullscreen.viz-only #playlist-overlay,
+#media-fullscreen.viz-only #search-overlay { display: none; }
+#media-fullscreen.viz-only { cursor: pointer; }
+
+.viz-close {
+    display: none;
+    position: absolute; top: 18px; right: 18px; z-index: 3;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent); border: 1px solid var(--border-strong);
+    color: var(--text-primary); font-size: 20px; cursor: pointer;
+    align-items: center; justify-content: center;
+}
+#media-fullscreen.viz-only .viz-close { display: flex; }
+.viz-close:active { transform: scale(0.92); }
+
+.viz-only-label {
+    display: none;
+    position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 3;
+    padding: 10px 24px; border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-primary) 70%, transparent); border: 1px solid var(--border-strong);
+    font-family: var(--font-display); font-size: 18px; color: var(--text-primary);
+    white-space: nowrap; pointer-events: none;
+    opacity: 0; transition: opacity 0.3s;
+}
+#media-fullscreen.viz-only .viz-only-label { display: block; }
+.viz-only-label.visible { opacity: 1; }
+
+/* Time over the fullscreen media (it hides the status bar). Typography comes
+   from .dock-clock; this only places it, top centre, clear of art and buttons. */
+.fs-clock {
+    position: absolute; top: 22px; left: 50%; transform: translateX(-50%); z-index: 3;
+    margin: 0; pointer-events: none;
+    /* Readable at a glance from the driver's seat: the centre gap between the
+       210 px art and the 260 px control grid is ~280 px at 800 px wide. */
+    font-size: 54px; font-weight: 300; line-height: 1; letter-spacing: -1px;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 2px 12px color-mix(in srgb, var(--bg-primary) 85%, transparent);
+}
+/* Visualizer-only: nothing else up top but the close button. */
+#media-fullscreen.viz-only .fs-clock { top: 18px; font-size: 96px; letter-spacing: -3px; }
+
+/* The home vumeter is now a door to the fullscreen visualizer. */
+#visualizer-canvas { cursor: pointer; }
+
+/* Continuous playback (services/player.rs). No existing rule covered these:
+   a finger-sized hit area on the 2px progress line (seek), the "repeat one"
+   mark on the repeat button, and the list header's action group. */
+.fs-progress-bar { cursor: pointer; height: 30px; padding: 14px 0; background-clip: content-box; } /* border-box: 2px line inside */
+.fs-ctrl-btn { position: relative; }
+.fs-ctrl-btn.repeat-one::after {
+    content: '1'; position: absolute; top: 6px; right: 8px;
+    font-family: var(--font-display); font-size: 11px; font-weight: 700; color: var(--accent);
+}
+.playlist-header-actions { display: flex; gap: 8px; }
+
+/* Cards with artwork (AndroidAuto2 showed thumbnails everywhere). The picture
+   and text reuse .ytm-art / .ytm-track-text; only the row layout is new. */
+.playlist-card-row { flex-direction: row; align-items: center; gap: 12px; padding: 10px 12px; text-align: left; min-width: 0; }
+
+/* Karaoke as one scrolling list (AndroidAuto2 style): a fixed-height scroller
+   with spacers so the first and last lines can also sit in the centre, where
+   the current line is kept. Unsynced lyrics ("plain") are simply readable. */
+.karaoke-lyrics { width: 100%; height: 100%; scrollbar-width: none; }
+.karaoke-lyrics::before, .karaoke-lyrics::after { content: ''; display: block; height: 45%; }
+.karaoke-line.plain { color: color-mix(in srgb, var(--text-primary) 75%, transparent); }
+

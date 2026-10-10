@@ -1,0 +1,160 @@
+#!/bin/bash
+#
+# rascar-debugcap — record everything the board sees around a CarPlay attempt,
+# on persistent storage.
+#
+# By default /var/log on Armbian is a zram disk (armbian-ramlog) and the journal
+# lives in it, so an ignition-off wipes both (install.sh's power-cut hardening
+# moves the journal to disk, but these captures do not depend on it). Everything here goes to /var/lib/rascar-debug on
+# the NVMe instead, one directory per boot:
+#
+#   kernel.log      dmesg (USB enumeration, dwc3/tcpm/fusb302 role changes, cdc_ncm)
+#   udev.log        udev add/remove/change events with properties
+#   state.log       1 s poll of UDC / dwc3 mode / typec roles / USB tree / netifs, logged on change only
+#   usbmon-*.pcap   raw USB traffic on the host controllers (after the role switch), ring buffer
+#   ip-monitor.log  link/address/route changes (the CDC-NCM netif appearing, SLAAC)
+#   avahi.log       every mDNS service seen on any link (_airplay._tcp, _carplay._tcp)
+#   journal.log     rascar-carplay + rascar-app journal, precise timestamps
+#   preflight.log   rascar-preflight at capture start
+#
+# Old boot directories beyond KEEP are pruned at start.
+
+set -u
+
+ROOT=/var/lib/rascar-debug
+KEEP=20
+UDC=fc000000.usb
+DEBUGFS=/sys/kernel/debug/usb/$UDC
+
+BOOT_ID=$(cut -c1-8 /proc/sys/kernel/random/boot_id)
+DIR="$ROOT/boot-$(date +%Y%m%d-%H%M%S)-$BOOT_ID"
+mkdir -p "$DIR"
+ln -sfn "$DIR" "$ROOT/latest"
+
+# Prune: keep the newest $KEEP boot directories.
+ls -1dt "$ROOT"/boot-* 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -rf
+
+log() { echo "$(date +%H:%M:%S.%3N) $*" >> "$DIR/debugcap.log"; }
+log "debugcap start boot=$BOOT_ID dir=$DIR"
+
+mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
+modprobe usbmon 2>>"$DIR/debugcap.log" || log "modprobe usbmon failed"
+
+/usr/local/sbin/rascar-preflight "$DIR/preflight.log" >/dev/null 2>&1
+
+PIDS=()
+spawn() {
+    local name=$1; shift
+    "$@" >> "$DIR/$name" 2>&1 &
+    PIDS+=($!)
+    log "spawned $name pid=$! : $*"
+}
+
+# Kernel log: dmesg from boot (so enumeration that happened before we started is
+# kept) and then follow.
+spawn kernel.log dmesg --time-format iso --follow
+spawn udev.log udevadm monitor --kernel --udev --property
+spawn ip-monitor.log ip -timestamp monitor all
+# -a all types, -r resolve, -p parseable; keeps running and prints changes.
+spawn avahi.log avahi-browse --all --resolve --parsable
+spawn journal.log journalctl --follow --output short-precise --unit rascar-carplay.service --unit rascar-app.service --unit avahi-daemon.service --unit rascar-4g-qmi.service --unit "rascar-4g-usbreset-*"
+
+# usbmon0 captures every bus. In device mode usbmon sees nothing on the gadget
+# port — our own ep0 log covers that side; this becomes useful once the port
+# re-roles to host and the car enumerates as a USB device.
+if [[ -e /sys/kernel/debug/usb/usbmon/0u ]]; then
+    # -Z root: tcpdump otherwise drops to its own user after opening the
+    # interface and can no longer create the rotated files in this root-owned dir.
+    spawn tcpdump.log tcpdump -Z root -i usbmon0 -s 0 -U -w "$DIR/usbmon.pcap" -C 50 -W 6
+else
+    log "usbmon0 not available — no USB pcap"
+fi
+
+# dwc3 tracepoints: every SETUP the car sends to the gadget controller, including
+# the standard requests the kernel answers itself and never forwards to FunctionFS
+# (GET_DESCRIPTOR, SET_CONFIGURATION, stalls). This is the ground truth for "the
+# car enumerated us but nothing reached ep0".
+TRACE=/sys/kernel/debug/tracing
+if [[ -d $TRACE/events/dwc3 ]]; then
+    echo 8192 > $TRACE/buffer_size_kb
+    for ev in dwc3_ctrl_req dwc3_event dwc3_gadget_ep_cmd; do
+        echo 1 > $TRACE/events/dwc3/$ev/enable
+    done
+    echo 1 > $TRACE/tracing_on
+    spawn dwc3-trace.log cat $TRACE/trace_pipe
+else
+    log "dwc3 trace events not available"
+fi
+
+rd() { cat "$1" 2>/dev/null | tr -d '\0' | tr '\n' ' ' | sed 's/ *$//'; }
+
+snapshot() {
+    echo "udc_state=$(rd /sys/class/udc/$UDC/state)"
+    echo "dwc3_mode=$(rd $DEBUGFS/mode) link_state=$(rd $DEBUGFS/link_state)"
+    for f in /sys/class/usb_role/*/*; do
+        [[ -f $f && -r $f ]] && echo "usb_role $(basename "$(dirname "$f")")/$(basename "$f")=$(rd "$f")"
+    done
+    for p in /sys/class/typec/port*; do
+        [[ -d $p ]] || continue
+        echo "typec $(basename "$p") data=$(rd "$p/data_role") power=$(rd "$p/power_role") partner=$([[ -d $p/$(basename "$p")-partner ]] && echo yes || echo no)"
+    done
+    for g in /sys/kernel/config/usb_gadget/*/; do
+        [[ -f $g/UDC ]] && echo "gadget $(basename "$g") UDC=$(rd "$g/UDC")"
+    done
+    echo "lsusb:"; lsusb 2>/dev/null | sed 's/^/  /'
+    echo "netifs:"; ip -br addr 2>/dev/null | grep -Ev '^(lo|lxcbr0) ' | sed 's/^/  /'
+}
+
+# Cheap change detector, bash built-ins only (no fork): the 1 s poll used to run
+# snapshot() every second — ~30 processes/s (cat|tr|tr|sed per attribute, lsusb,
+# ip…) and most of the idle Pi's process churn. Now snapshot() only runs when
+# this fingerprint changes. IP address changes are in ip-monitor.log already.
+rdv() { v=""; [[ -r $1 ]] && read -r -d '' v < "$1" 2>/dev/null; v=${v//$'\n'/ }; v=${v% }; }
+fingerprint() {
+    local f d s=""
+    for f in /sys/class/udc/$UDC/state $DEBUGFS/mode $DEBUGFS/link_state \
+             /sys/class/usb_role/*/role /sys/class/typec/port*/data_role \
+             /sys/class/typec/port*/power_role /sys/kernel/config/usb_gadget/*/UDC; do
+        [[ -e $f ]] && { rdv "$f"; s+="$f=$v;"; }
+    done
+    for d in /sys/class/typec/port*-partner; do [[ -e $d ]] && s+="${d##*/};"; done
+    for d in /sys/bus/usb/devices/[0-9]*-*; do
+        [[ $d == *:* ]] && continue
+        rdv "$d/devnum"; s+="${d##*/}#$v;"
+    done
+    for d in /sys/class/net/*; do rdv "$d/operstate"; s+="${d##*/}:$v;"; done
+    FP=$s
+}
+
+# Poll loop: log a full snapshot only when something changed, plus a heartbeat
+# every 60 s so a gap in the log means "board off", not "nothing happened".
+prev=""
+prevfp=""
+tick=0
+cleanup() {
+    log "debugcap stop"
+    kill "${PIDS[@]}" 2>/dev/null
+    sync
+    exit 0
+}
+trap cleanup TERM INT
+
+while true; do
+    fingerprint
+    if [[ $FP != "$prevfp" ]]; then
+        prevfp=$FP
+        cur=$(snapshot)
+        if [[ $cur != "$prev" ]]; then
+            { echo "=== $(date +%H:%M:%S.%3N) uptime=$(cut -d' ' -f1 /proc/uptime)s STATE CHANGE"; echo "$cur"; } >> "$DIR/state.log"
+            prev=$cur
+        fi
+    fi
+    tick=$((tick + 1))
+    if (( tick % 60 == 0 )); then
+        echo "--- $(date +%H:%M:%S) heartbeat uptime=$(cut -d' ' -f1 /proc/uptime)s" >> "$DIR/state.log"
+    fi
+    # No periodic `sync` any more: it flushed the whole disk every 5 s; the
+    # kernel now writes dirty pages back within ~3 s
+    # (/etc/sysctl.d/90-rascar-powercut.conf), which bounds the loss at a cut.
+    sleep 1
+done

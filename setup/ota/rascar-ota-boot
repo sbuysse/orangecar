@@ -1,0 +1,110 @@
+#!/bin/bash
+#
+# rascar-ota-boot — OTA boot guard, runs before every rascar service.
+#
+# 1. A release still on trial (the agent never confirmed it healthy) gets one
+#    more boot, up to MAX_TRIAL_BOOTS; past that it is rolled back HERE, in
+#    shell, without trusting any code from the release under trial (its agent
+#    may be the broken part).
+# 2. Otherwise the CURRENT (known-good) agent switches to a staged release:
+#    `rascar-agent apply-staged` (local work only: copy a few system files,
+#    swap the /opt/orangecar symlink).
+#
+# Installed by setup/ota/install-ota.sh, deliberately NOT updatable by OTA
+# (the release allowlist refuses this path). Every step is bounded and the
+# script always exits 0: the car's services must start whatever happens here.
+set -u
+
+STATE=${RASCAR_AGENT_STATE:-/var/lib/rascar-agent}
+LINK=${RASCAR_INSTALL_LINK:-/opt/orangecar}
+MAX_TRIAL_BOOTS=${RASCAR_MAX_TRIAL_BOOTS:-3}
+AGENT=${RASCAR_AGENT_BIN:-$LINK/target/release/rascar-agent}
+SYSTEMCTL=${RASCAR_SYSTEMCTL:-systemctl}
+TRIAL=$STATE/trial
+
+log() { echo "rascar-ota-boot: $*"; }
+
+# Same allowlist as the agent (manifest::system_path_allowed), so a damaged
+# installed.list cannot make the guard write outside the release's own files.
+allowed() {
+    case $1 in
+        */../*|*/..) return 1 ;;
+        /usr/local/sbin/rascar-ota-boot|/etc/systemd/system/rascar-ota-boot.service|/etc/systemd/system/rascar-ota-boot.service.d/*) return 1 ;;
+        /usr/local/sbin/rascar-*/*) return 1 ;;
+        /usr/local/sbin/rascar-*) return 0 ;;
+        /etc/systemd/system/rascar-*.service|/etc/systemd/system/rascar-*.target|/etc/systemd/system/rascar-*.timer|/etc/systemd/system/rascar-*.conf) return 0 ;;
+        /etc/udev/rules.d/*/*) return 1 ;;
+        /etc/udev/rules.d/*rascar*.rules) return 0 ;;
+        /etc/modules-load.d/rascar*.conf) return 0 ;;
+    esac
+    return 1
+}
+
+rollback() {
+    local version=$1 release=$2 previous=$3
+    log "rolling back $version -> $previous (no healthy boot within $MAX_TRIAL_BOOTS boots)"
+    if [[ ! -d $previous ]]; then
+        log "previous release $previous is missing: cannot roll back, keeping $version"
+        return 1
+    fi
+    local list=$release/.ota/installed.list reload=0 path bak
+    if [[ -f $list ]]; then
+        while IFS= read -r path; do
+            [[ -n $path ]] || continue
+            allowed "$path" || { log "skipping disallowed path $path"; continue; }
+            bak=$release/.ota/backup$path
+            if [[ -f $bak ]]; then
+                cp -p "$bak" "$path.ota-tmp" && mv -f "$path.ota-tmp" "$path"
+            else
+                rm -f "$path"
+            fi
+            [[ $path == /etc/systemd/* ]] && reload=1
+        done < "$list"
+    fi
+    ln -sfn "$previous" "$LINK.ota-new" && mv -Tf "$LINK.ota-new" "$LINK"
+    sync
+    if (( reload )); then
+        timeout -k 2 20 "$SYSTEMCTL" daemon-reload || log "daemon-reload failed"
+    fi
+    grep -qxF "$version" "$STATE/bad-versions" 2>/dev/null || echo "$version" >> "$STATE/bad-versions"
+    echo "$version" > "$STATE/guard-rollback"
+    rm -f "$TRIAL"
+    sync
+}
+
+if [[ -f $TRIAL ]]; then
+    version= release= previous= boots=0
+    while IFS='=' read -r k v; do
+        case $k in
+            version) version=$v ;;
+            release) release=$v ;;
+            previous) previous=$v ;;
+            boots) boots=$v ;;
+        esac
+    done < "$TRIAL"
+    [[ $boots =~ ^[0-9]+$ ]] || boots=0
+    current=$(readlink -f "$LINK" 2>/dev/null)
+    if [[ -z $version || -z $release || -z $previous ]]; then
+        log "unreadable trial file; removing it"
+        rm -f "$TRIAL"
+    elif [[ $current != "$(readlink -f "$release" 2>/dev/null)" ]]; then
+        log "trial $version is not the current release any more; forgetting it"
+        rm -f "$TRIAL"
+    else
+        boots=$((boots + 1))
+        if (( boots > MAX_TRIAL_BOOTS )); then
+            rollback "$version" "$release" "$previous"
+        else
+            log "release $version on trial, boot $boots/$MAX_TRIAL_BOOTS"
+            printf 'version=%s\nrelease=%s\nprevious=%s\nboots=%s\n' "$version" "$release" "$previous" "$boots" > "$TRIAL.tmp" \
+                && sync "$TRIAL.tmp" && mv -f "$TRIAL.tmp" "$TRIAL" && sync "$STATE"
+        fi
+    fi
+    # Never switch to another release on top of a trial boot.
+    exit 0
+fi
+
+if [[ -x $AGENT ]]; then
+    timeout -k 2 25 "$AGENT" apply-staged || log "apply-staged exited $? (services start on the current release)"
+fi
+exit 0

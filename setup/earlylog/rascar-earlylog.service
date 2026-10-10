@@ -1,0 +1,11 @@
+[Unit]
+Description=RasCar early-boot logger: fsync kmsg + journal to the NVMe for the first 90 s
+DefaultDependencies=no
+After=local-fs.target systemd-journald.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/rascar-earlylog
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=RasCar agent: push logs to the update server, fetch and stage signed OTA releases (idle until configured)
+After=network.target rascar-ota-boot.service
+# Nothing waits for the agent: it is never on the CarPlay start path.
+
+[Service]
+Type=simple
+# Root: reads the whole journal, writes /opt/orangecar-releases, installs
+# release system files and restarts rascar units after a failed trial.
+ExecStart=/opt/orangecar/target/release/rascar-agent run
+Restart=always
+RestartSec=30
+# Background work only: never compete with the dashboard or the CarPlay stream.
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=30%
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

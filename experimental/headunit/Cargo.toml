@@ -1,0 +1,40 @@
+[package]
+name = "rascar-headunit"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "rascar_headunit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rascar-headunit"
+path = "src/main.rs"
+
+# Android Auto head unit for a real phone, streamed into the dashboard (aa.html).
+[[bin]]
+name = "rascar-aa"
+path = "src/bin/rascar_aa.rs"
+
+[dependencies]
+tokio      = { workspace = true }
+anyhow     = { workspace = true }
+tracing    = { workspace = true }
+tracing-subscriber = { workspace = true }
+nusb       = "0.1"
+minifb     = "0.27"
+rustls     = { version = "0.23", features = ["ring"] }
+bytes      = "1"
+bitflags   = "2"
+prost      = "0.13"
+clap       = { version = "4", features = ["derive"] }
+libc       = "0.2"
+serde      = { workspace = true }
+serde_json = { workspace = true }
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+rcgen      = { workspace = true }
+ring       = "0.17"

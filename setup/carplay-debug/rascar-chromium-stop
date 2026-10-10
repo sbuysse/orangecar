@@ -1,0 +1,20 @@
+#!/bin/sh
+# ExecStop of rascar-carplay: close the kiosk Chromium cleanly BEFORE systemd
+# signals the service. Without it the compositor is SIGKILLed (render.rs reap)
+# and the whole cgroup goes down in ~250 ms: Chromium never runs its shutdown,
+# so every cookie written in its last ~30 s (its commit interval) is lost:
+# a sign-in done just before a restart/reboot never reaches the disk.
+# SIGTERM on the browser process = the same clean exit as closing the window.
+set -u
+pid=$(ps -eo pid=,args= | awk '$2 ~ /\/chromium\/chromium$/ && $0 !~ / --type=/ && $0 ~ /--user-data-dir=\/var\/lib\/rascar\/chromium-profile/ {print $1; exit}')
+[ -n "$pid" ] || exit 0
+kill -TERM "$pid" 2>/dev/null || exit 0
+# Up to 10 s; it measured < 1 s on the Pi.
+i=0
+while kill -0 "$pid" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$pid" 2>/dev/null; then
+    echo "rascar-chromium-stop: chromium $pid still running after 10 s" >&2
+else
+    echo "rascar-chromium-stop: chromium $pid exited cleanly after $((i / 10)).$((i % 10)) s"
+fi
+exit 0

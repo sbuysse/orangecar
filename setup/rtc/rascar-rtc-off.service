@@ -1,0 +1,17 @@
+[Unit]
+Description=RasCar: detach the battery-less HYM8563 RTC (its interrupt line is stuck: ~4600 IRQ/s)
+# /etc/modprobe.d/rascar-no-hym8563.conf blocks the module, but it is also in
+# the initramfs, which loads it before that applies (until the initramfs is next
+# rebuilt). Unbinding frees the IRQ: measured load 1.49 -> 0.66 in 60 s.
+# No battery = no valid time at boot anyway; time comes from NTP / car GPS /
+# fake-hwclock. Remove this unit (and the modprobe file) if a coin cell is fitted.
+After=local-fs.target
+ConditionPathExists=/sys/bus/i2c/drivers/rtc-hym8563/6-0051
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo 6-0051 > /sys/bus/i2c/drivers/rtc-hym8563/unbind'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

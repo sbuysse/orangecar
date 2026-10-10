@@ -1,0 +1,6 @@
+/* Waze Live Map in the dashboard frame: the "Send to your phone / App Store /
+   Google Play" download bar (66 px) covers the bottom of the map and cannot be
+   dismissed; the reCAPTCHA badge sits over the map's left edge. Nothing else
+   is restyled. */
+.wz-downloadbar { display: none !important; }
+.grecaptcha-badge { visibility: hidden !important; }

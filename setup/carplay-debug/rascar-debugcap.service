@@ -1,0 +1,15 @@
+[Unit]
+Description=RasCar debug capture (kernel/udev/usbmon/typec/mDNS -> /var/lib/rascar-debug)
+After=local-fs.target systemd-udevd.service avahi-daemon.service
+Before=rascar-carplay.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/rascar-debugcap
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,119 @@
+#!/bin/bash
+#
+# rascar-preflight — verify the board is ready for a CarPlay run and record why
+# it is not. Never fails the caller: every check prints PASS / WARN / FAIL and the
+# script always exits 0 so it can run as an ExecStartPre without blocking the
+# transmitter. The summary line at the end is the thing to read first.
+#
+# Usage: sudo rascar-preflight [output-file]
+
+OUT="${1:-}"
+PASS=0; WARN=0; FAIL=0
+
+say()  { echo "$*"; }
+pass() { PASS=$((PASS+1)); say "  PASS  $*"; }
+warn() { WARN=$((WARN+1)); say "  WARN  $*"; }
+fail() { FAIL=$((FAIL+1)); say "  FAIL  $*"; }
+rd()   { cat "$1" 2>/dev/null | tr -d '\0' | tr '\n' ' ' | sed 's/ *$//'; }
+
+UDC=fc000000.usb
+BIN=/opt/orangecar/target/release/rascar-carplay
+DEBUGFS=/sys/kernel/debug/usb/$UDC
+
+run_checks() {
+say "=== rascar-preflight $(date -Is) boot=$(cat /proc/sys/kernel/random/boot_id | cut -c1-8) kernel=$(uname -r) ==="
+
+say "-- process / binary"
+[[ $EUID -eq 0 ]] && pass "running as root" || fail "not root (configfs, debugfs and role switch need root)"
+if [[ -x $BIN ]]; then
+    pass "binary $BIN ($(stat -c '%y' "$BIN" | cut -d. -f1), build id: $(cat /etc/rascar/build-id 2>/dev/null || echo unknown))"
+else
+    fail "binary $BIN missing — run cargo build --release -p rascar-carplay"
+fi
+
+say "-- USB device controller"
+if [[ -d /sys/class/udc/$UDC ]]; then
+    pass "UDC $UDC present, state=$(rd /sys/class/udc/$UDC/state)"
+else
+    fail "UDC $UDC missing (available: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')) — peripheral overlay not applied?"
+fi
+bound=""
+for g in /sys/kernel/config/usb_gadget/*/; do
+    [[ -f $g/UDC ]] || continue
+    u=$(rd "$g/UDC")
+    [[ -n $u ]] && bound+="$(basename "$g")→$u "
+done
+if [[ -z $bound ]]; then
+    pass "no configfs gadget currently holds a UDC"
+else
+    warn "gadget(s) bound: $bound (leftover from a previous run or the AA bridge — rascar-carplay recreates its own)"
+fi
+if systemctl is-active -q rascar-bridge.service; then
+    fail "rascar-bridge (Android Auto) is ACTIVE — it owns the same UDC; stop/disable it"
+else
+    pass "rascar-bridge inactive"
+fi
+ffs=$(mount | awk '$5=="functionfs"{print $3}' | tr '\n' ' ')
+[[ -z $ffs ]] && pass "no stale functionfs mount" || warn "functionfs mounted at: $ffs"
+
+say "-- role switch (Phase 3 hand-off to USB host)"
+if [[ -r $DEBUGFS/mode ]]; then
+    pass "dwc3 debugfs mode=$(rd $DEBUGFS/mode) link_state=$(rd $DEBUGFS/link_state)"
+else
+    warn "dwc3 debugfs $DEBUGFS/mode not readable (debugfs not mounted?)"
+fi
+rs=/sys/class/usb_role/$UDC-role-switch
+if [[ -e $rs/role ]]; then
+    pass "usb_role $rs/role=$(rd $rs/role)"
+else
+    warn "usb_role switch has no 'role' attribute on this board — role_switch.rs must fall back to dwc3 debugfs"
+fi
+drm=""
+while IFS= read -r f; do
+    case "$f" in *fc000000*) drm+="$(rd "$f") ($f) ";; esac
+done < <(find /sys/firmware/devicetree/base -name dr_mode 2>/dev/null)   # /proc/device-tree is a symlink find won't descend
+if [[ -z $drm ]]; then
+    warn "no dr_mode property found for usb@fc000000 in the device tree"
+elif [[ $drm == peripheral* ]]; then
+    warn "dr_mode=$drm — controller is forced to peripheral; a host re-role will likely be refused"
+else
+    pass "dr_mode=$drm"
+fi
+say "        boot overlays: $(grep -E '^overlays=' /boot/armbianEnv.txt 2>/dev/null | cut -d= -f2)"
+if [[ -d /sys/class/typec/port0 ]]; then
+    say "        typec port0: data_role=$(rd /sys/class/typec/port0/data_role) power_role=$(rd /sys/class/typec/port0/power_role) port_type=$(rd /sys/class/typec/port0/port_type)"
+fi
+
+say "-- Phase 3 networking (CDC-NCM + mDNS)"
+modinfo cdc_ncm >/dev/null 2>&1 && pass "cdc_ncm module available" || fail "cdc_ncm module missing"
+systemctl is-active -q avahi-daemon && pass "avahi-daemon active" || fail "avahi-daemon inactive — AirPlay endpoint discovery will be empty"
+command -v avahi-browse >/dev/null && pass "avahi-browse present" || fail "avahi-browse missing (apt install avahi-utils)"
+
+say "-- Phase 5 media"
+for b in ffmpeg Xvfb chromium parec; do
+    command -v $b >/dev/null && pass "$b present" || fail "$b missing"
+done
+code=$(curl -s -o /dev/null -m 3 -w '%{http_code}' http://127.0.0.1:8080/ 2>/dev/null)
+[[ $code == 200 ]] && pass "dashboard http://127.0.0.1:8080 answers 200" || warn "dashboard answered '$code' (rascar-app down? the car would mirror a blank page)"
+
+say "-- debug capture"
+lsmod | grep -q '^usbmon' && pass "usbmon loaded" || warn "usbmon not loaded (no USB pcap after the host role switch)"
+systemctl is-active -q rascar-debugcap && pass "rascar-debugcap active" || warn "rascar-debugcap inactive — only the transmitter log will exist"
+free_mb=$(df -Pm /var/lib | awk 'NR==2{print $4}')
+(( free_mb > 2048 )) && pass "free space on /var/lib: ${free_mb} MB" || warn "only ${free_mb} MB free on /var/lib"
+if timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes; then
+    pass "clock NTP-synchronised"
+else
+    warn "clock NOT synchronised (no RTC/internet in the car) — correlate logs by boot id + monotonic time, not wall clock"
+fi
+
+say "=== SUMMARY: PASS=$PASS WARN=$WARN FAIL=$FAIL ==="
+}
+
+if [[ -n $OUT ]]; then
+    mkdir -p "$(dirname "$OUT")"
+    run_checks 2>&1 | tee -a "$OUT"
+else
+    run_checks 2>&1
+fi
+exit 0

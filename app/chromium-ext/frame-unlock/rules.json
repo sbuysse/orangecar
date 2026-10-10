@@ -1,0 +1,37 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        {
+          "header": "x-frame-options",
+          "operation": "remove"
+        },
+        {
+          "header": "content-security-policy",
+          "operation": "remove"
+        }
+      ]
+    },
+    "condition": {
+      "requestDomains": [
+        "google.com",
+        "waze.com",
+        "youtube.com",
+        "netflix.com",
+        "disneyplus.com",
+        "free.fr",
+        "oqee.tv",
+        "microsoft.com",
+        "microsoftonline.com",
+        "live.com",
+        "cloud.microsoft"
+      ],
+      "resourceTypes": [
+        "sub_frame"
+      ]
+    }
+  }
+]

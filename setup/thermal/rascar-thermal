@@ -1,0 +1,70 @@
+#!/bin/bash
+# rascar-thermal — CPU throttling for a board with NO fan.
+#
+# The device tree only has fan ("active") trips at 55/65 °C and a critical
+# shutdown at 115 °C: nothing slows the CPU down before that. On 2026-09-29 a
+# sustained load made the board too hot to touch and the NVMe dropped off
+# (read-only rootfs). This lowers scaling_max_freq in steps as the hottest
+# sensor rises (SoC zones + NVMe), with 5 °C hysteresis, and restores it when
+# the board cools. Re-applied every tick, because rascar-carplay-run writes
+# its own 1.8 GHz cap at every connection attempt.
+#
+# Logs every level change, and the temperatures once a minute, to
+# $LOG (on disk: the journal of a crashed boot is lost).
+set -u
+TICK=5
+HYST=5
+LOG=${RASCAR_THERMAL_LOG:-/var/lib/rascar-debug/thermal.log}
+#            level: 0       1       2       3       4
+THRESH=(      0      72      78      83      88)   # °C to enter the level
+BIG=(    1800000 1416000 1008000  816000  408000)  # policy4 + policy6 (A76)
+LITTLE=( 1800000 1800000 1416000 1008000  600000)  # policy0 (A55)
+NVME_OFFSET=${NVME_OFFSET:-5}   # NVMe runs hotter; count it 5 °C lower
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG"; }
+
+# Hottest sensor in whole °C: max(SoC thermal zones, NVMe - offset).
+hottest() {
+    if [ -n "${RASCAR_THERMAL_FAKE:-}" ]; then cat "$RASCAR_THERMAL_FAKE"; return; fi
+    local t max=0 z h
+    for z in /sys/class/thermal/thermal_zone*/temp; do
+        t=$(( $(cat "$z" 2>/dev/null || echo 0) / 1000 )); [ "$t" -gt "$max" ] && max=$t
+    done
+    for h in /sys/class/hwmon/hwmon*; do
+        [ "$(cat "$h/name" 2>/dev/null)" = nvme ] || continue
+        for z in "$h"/temp*_input; do
+            t=$(( $(cat "$z" 2>/dev/null || echo 0) / 1000 - NVME_OFFSET )); [ "$t" -gt "$max" ] && max=$t
+        done
+    done
+    echo "$max"
+}
+
+cap() {   # $1 = level
+    local p f
+    for p in /sys/devices/system/cpu/cpufreq/policy4 /sys/devices/system/cpu/cpufreq/policy6; do
+        f=${BIG[$1]}; [ "$(cat "$p/scaling_max_freq")" = "$f" ] || echo "$f" > "$p/scaling_max_freq"
+    done
+    p=/sys/devices/system/cpu/cpufreq/policy0
+    f=${LITTLE[$1]}; [ "$(cat "$p/scaling_max_freq")" = "$f" ] || echo "$f" > "$p/scaling_max_freq"
+}
+
+mkdir -p "$(dirname "$LOG")"
+level=0; beat=0
+log "start (levels ${THRESH[*]} °C, hysteresis $HYST)"
+while true; do
+    t=$(hottest)
+    new=$level
+    # Up as far as the temperature says; down one level once below its threshold - HYST.
+    while [ "$new" -lt 4 ] && [ "$t" -ge "${THRESH[$((new + 1))]}" ]; do new=$((new + 1)); done
+    while [ "$new" -gt 0 ] && [ "$t" -lt $(( THRESH[new] - HYST )) ]; do new=$((new - 1)); done
+    if [ "$new" != "$level" ]; then
+        log "level $level -> $new at ${t} °C (A76 max ${BIG[$new]} kHz, A55 max ${LITTLE[$new]} kHz)"
+        echo "rascar-thermal: level $level -> $new at ${t} °C"
+        level=$new
+    fi
+    cap "$level"
+    beat=$((beat + TICK))
+    if [ "$beat" -ge 60 ]; then beat=0; log "hottest ${t} °C level $level load $(cut -d' ' -f1 /proc/loadavg)"; fi
+    [ "${RASCAR_THERMAL_ONCE:-}" = 1 ] && break
+    sleep "$TICK"
+done

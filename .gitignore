@@ -1,0 +1,25 @@
+/target/
+__pycache__/
+*.pyc
+
+# Local session notes
+tasks/
+
+# Kernel module build outputs
+kernel/cdc_ncm/build/
+*.ko
+*.o
+*.mod
+*.mod.c
+modules.order
+Module.symvers
+
+# Chromium writes generated rulesets into the unpacked extension
+app/chromium-ext/frame-unlock/_metadata/
+
+# Never commit secrets or captures
+*.key
+*.pem
+*.pass
+*.pcap
+*.pcapng

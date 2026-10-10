@@ -1,0 +1,56 @@
+[package]
+name = "rascar-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rascar-app"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+# Web framework
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "set-header"] }
+
+# HTTP client for weather/calendar
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+# Optional home server: its remote endpoint may use a self-signed certificate, pinned by SHA-256
+rustls = { workspace = true }
+sha2 = "0.10"
+bytes = { workspace = true }
+
+# Calendar parsing
+ical = "0.11"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Serial port for OBD-II
+tokio-serial = "5"
+# termios raw mode for the 4G stick's AT port (already a workspace dependency)
+libc = { workspace = true }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Config/storage
+dirs = "5"
+rusqlite = { version = "0.31", features = ["bundled"] }
+urlencoding = "2"
+url = "2"
+
+# DevTools client for the streaming-app tabs (loopback ws://, no TLS)
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+# Paused clock for the phone engine tests (heartbeats, timeouts, linger in virtual time)
+tokio = { workspace = true, features = ["test-util"] }
+# A self-signed home server stand-in for the pinned-TLS test
+rcgen = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }

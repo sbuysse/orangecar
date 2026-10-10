@@ -1,0 +1,23 @@
+[Unit]
+Description=RasCar CarPlay Transmitter (debug build, one attempt per run)
+After=rascar-app.service avahi-daemon.service
+Wants=rascar-app.service avahi-daemon.service
+# Same UDC as the Android Auto bridge: never run both.
+Conflicts=rascar-bridge.service
+# Never give up in the car: every replug must get a fresh attempt.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Root: configfs, FunctionFS, debugfs role switch, nusb, uinput.
+EnvironmentFile=-/etc/rascar/carplay.env
+ExecStart=/usr/local/sbin/rascar-carplay-run
+Restart=always
+# Spacing between attempts: 5 s re-role-switched the car every 5 s and wore out
+# its CarPlay daemon; a failing run already lasts ~35-50 s.
+RestartSec=20
+# Give the binary time to remove its gadget on SIGTERM.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

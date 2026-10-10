@@ -1,0 +1,23 @@
+{
+  "CookiesAllowedForUrls": [
+    "https://[*.]google.com,http://localhost:8080",
+    "https://[*.]youtube.com,http://localhost:8080",
+    "https://[*.]netflix.com,http://localhost:8080",
+    "https://[*.]disneyplus.com,http://localhost:8080",
+    "https://[*.]disney.com,http://localhost:8080",
+    "https://[*.]go.com,http://localhost:8080",
+    "https://[*.]microsoft.com,http://localhost:8080",
+    "https://[*.]microsoftonline.com,http://localhost:8080",
+    "https://[*.]live.com,http://localhost:8080",
+    "https://[*.]office.com,http://localhost:8080",
+    "https://[*.]microsoft365.com,http://localhost:8080",
+    "https://[*.]cloud.microsoft,http://localhost:8080",
+    "https://[*.]skype.com,http://localhost:8080",
+    "https://[*.]free.fr,http://localhost:8080",
+    "https://[*.]oqee.net,http://localhost:8080",
+    "https://[*.]waze.com,http://localhost:8080"
+  ],
+  "DefaultGeolocationSetting": 1,
+  "BrowserSignin": 0,
+  "SyncDisabled": true
+}

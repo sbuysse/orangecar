@@ -1,0 +1,24 @@
+# Android Auto head unit: phone on a USB host port → dashboard page aa.html.
+# Install: sudo cp rascar-aa.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# Not enabled by default; start it by hand for the first phone tests.
+# Replace @RASCAR_USER@ / @RASCAR_UID@ with the kiosk user and its uid (setup/install.sh does it).
+[Unit]
+Description=RasCar Android Auto head unit (phone → dashboard)
+After=rascar-app.service user@@RASCAR_UID@.service
+Wants=user@@RASCAR_UID@.service
+
+[Service]
+Type=simple
+User=@RASCAR_USER@
+# PulseAudio runs in the kiosk user's session; pacat finds it through these.
+Environment=XDG_RUNTIME_DIR=/run/user/@RASCAR_UID@
+Environment=HOME=/home/@RASCAR_USER@
+ExecStart=/opt/orangecar/target/release/rascar-aa --ws 127.0.0.1:8091
+Restart=on-failure
+RestartSec=5
+# Never let a protocol/decoder bug starve the dashboard or CarPlay.
+Nice=5
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target

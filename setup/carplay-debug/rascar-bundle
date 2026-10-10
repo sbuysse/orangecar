@@ -1,0 +1,38 @@
+#!/bin/bash
+#
+# rascar-bundle — pack the CarPlay debug evidence into one tarball to pull back.
+#
+# Usage: sudo rascar-bundle [N]     # N = how many most recent boots (default 3)
+# Then, from the workstation:
+#   scp <user>@<board>:/var/lib/rascar-debug/bundles/<file>.tar.gz .
+
+set -eu
+
+ROOT=/var/lib/rascar-debug
+N="${1:-3}"
+STAMP=$(date +%Y%m%d-%H%M%S)
+WORK=$(mktemp -d)
+OUT="$ROOT/bundles/rascar-debug-$STAMP.tar.gz"
+mkdir -p "$ROOT/bundles" "$WORK/rascar-debug-$STAMP"
+DEST="$WORK/rascar-debug-$STAMP"
+
+# The current boot's journal is the only one that exists (zram /var/log).
+journalctl -b --no-pager -o short-precise > "$DEST/journal-current-boot.log" 2>&1 || true
+/usr/local/sbin/rascar-preflight > "$DEST/preflight-now.log" 2>&1 || true
+{
+    echo "hostname: $(hostname)"; uname -a
+    echo "build id: $(cat /etc/rascar/build-id 2>/dev/null || echo unknown)"
+    sha256sum /opt/orangecar/target/release/rascar-* 2>/dev/null
+    grep -E '^overlays=' /boot/armbianEnv.txt 2>/dev/null
+    systemctl --no-pager status rascar-carplay rascar-debugcap rascar-app rascar-bridge 2>&1 | grep -E '●|Active:'
+} > "$DEST/versions.txt"
+
+for d in $(ls -1dt "$ROOT"/boot-* 2>/dev/null | head -n "$N"); do
+    cp -a "$d" "$DEST/"
+done
+
+tar -C "$WORK" -czf "$OUT" "rascar-debug-$STAMP"
+rm -rf "$WORK"
+chmod 0644 "$OUT"
+echo "$OUT ($(du -h "$OUT" | cut -f1))"
+echo "pull with: scp ${SUDO_USER:-$(id -un)}@$(hostname -I | awk '{print $1}'):$OUT ."

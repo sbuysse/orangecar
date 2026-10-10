@@ -1,0 +1,19 @@
+[Unit]
+Description=RasCar: cap the NVMe at operational power state 2 (cooler, no sleep states)
+# APST and PCIe ASPM stay disabled (kernel args: the drive vanished from PCIe
+# on low-power exit). On the tested drive (Samsung 970 EVO) PS2 is an
+# OPERATIONAL state (2.1 W max vs 6.2 W in PS0, entry/exit latency 0), so it
+# cools the drive without any sleep transition (controller 75 -> 69 C in 5 min,
+# writes still 186 MB/s against a ~100 KiB/s workload). Not persistent in the
+# drive: re-applied at every boot. install.sh only enables this unit when
+# `nvme id-ctrl` reports PS2 as operational on your drive.
+After=local-fs.target
+ConditionPathExists=/dev/nvme0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nvme set-feature /dev/nvme0 --feature-id=2 --value=2
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

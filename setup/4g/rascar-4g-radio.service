@@ -1,0 +1,6 @@
+[Unit]
+Description=RasCar 4G: switch the DWM-222W stick's radio on (it boots in CFUN=4)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rascar-4g-radio

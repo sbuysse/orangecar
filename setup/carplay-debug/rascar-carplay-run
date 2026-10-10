@@ -1,0 +1,219 @@
+#!/bin/bash
+#
+# rascar-carplay-run — one CarPlay attempt, logged to persistent storage.
+#
+# systemd restarts this after every exit, so each plug-in / failure gets its own
+# numbered log file under the current boot's debug directory. Output also goes to
+# the journal (stdout) for live `journalctl -fu rascar-carplay` over SSH.
+
+set -u
+
+ROOT=/var/lib/rascar-debug
+BIN=/opt/orangecar/target/release/rascar-carplay
+
+# The same environment the systemd unit gets, so a hand-run attempt is
+# instrumented identically to one the service fires (wire trace, build id, and
+# any teardown-hypothesis A/B flags). Without this, manual runs silently logged
+# less than automatic ones.
+ENVFILE=/etc/rascar/carplay.env
+if [[ -r $ENVFILE ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENVFILE"
+    set +a
+fi
+
+DIR=$(readlink -f "$ROOT/latest" 2>/dev/null)
+if [[ -z $DIR || ! -d $DIR ]]; then
+    DIR="$ROOT/boot-$(date +%Y%m%d-%H%M%S)-$(cut -c1-8 /proc/sys/kernel/random/boot_id)"
+    mkdir -p "$DIR"
+fi
+mkdir -p "$DIR/runs"
+
+n=$(( $(ls -1 "$DIR/runs" 2>/dev/null | wc -l) + 1 ))
+
+# Attempt counter for this boot (used by the optional A/B below).
+ATTEMPT=$(( $(ls -1 "$DIR"/runs/*-carplay.log 2>/dev/null | wc -l) + 1 ))
+# Experimental behaviours are opt-in, one at a time, from carplay.env. These
+# three were tested in the car and made things worse as a default, so they are
+# cleared here even if an old carplay.env still sets them:
+#   RASCAR_EARLY_NCM     bring NCM up during iAP2 (raced udev's interface rename)
+#   RASCAR_NCM_HOLD      cdc_ncm hold_apple_gadget (see kernel/README.md)
+#   RASCAR_ROTATE_SERIAL new USB serial each attempt
+# Other knobs that still work by hand: RASCAR_DEFER_NCM_BIND=1,
+# RASCAR_CTRL_VIA_AVAHI=1 (see docs/configuration.md).
+unset RASCAR_EARLY_NCM RASCAR_NCM_HOLD RASCAR_ROTATE_SERIAL || true
+VARIANT_NAME=baseline
+# RASCAR_POST_AUTH_RESET_AB=1: odd attempts do a host-side USB reset right
+# after iAP2 authentication (a second enumeration), even attempts the baseline.
+# Kept for experiments; the tested head unit fails SET_CONFIGURATION after it.
+if [ "${RASCAR_POST_AUTH_RESET_AB:-0}" = 1 ]; then
+    if [ $(( ATTEMPT % 2 )) -eq 1 ]; then
+        export RASCAR_POST_AUTH_RESET=1
+        VARIANT_NAME=post-auth-reset
+    else
+        unset RASCAR_POST_AUTH_RESET || true
+    fi
+fi
+LOG="$DIR/runs/$(printf '%03d' "$n")-$(date +%H%M%S)-carplay.log"
+
+{
+    echo "=== rascar-carplay run #$n $(date -Is) uptime=$(cut -d' ' -f1 /proc/uptime)s"
+    echo "binary: $BIN ($(stat -c '%y' "$BIN" 2>/dev/null | cut -d. -f1)) sha256=$(sha256sum "$BIN" 2>/dev/null | cut -c1-16)"
+    echo "build id: ${RASCAR_BUILD_ID:-unknown}  wire trace: ${RASCAR_WIRE_TRACE:-0}"
+    # Every expansion here MUST be ${x:-}: the whole block runs under `set -u`
+    # inside a { ... } | tee, so one unset variable silently kills the block
+    # and the VARIANT line (which records the A/B arm) with it.
+    echo "VARIANT: attempt ${ATTEMPT:-?} = ${VARIANT_NAME:-?} (NCM_HOLD=${RASCAR_NCM_HOLD:-off} EARLY_NCM=${RASCAR_EARLY_NCM:-off} ROLE_SWITCH_DELAY_MS=${RASCAR_ROLE_SWITCH_DELAY_MS:-default-10} ROTATE_SERIAL=${RASCAR_ROTATE_SERIAL:-off} IAP2_HID=${RASCAR_IAP2_HID:-off} HIDE_CARPLAY=${RASCAR_HIDE_CARPLAY:-off} PERSONA=${RASCAR_PERSONA:-iphone} POST_AUTH_RESET=${RASCAR_POST_AUTH_RESET:-off})"
+} | tee -a "$LOG"
+
+# The stock cdc_ncm is wrong for an Apple gadget in three ways: it rejects the
+# car's non-hex iMACAddress (no netif -> no AirPlay), it switches the alt setting
+# ~10-20 ms after SET_CONFIGURATION (far too soon: the gadget EPROTOs and drops
+# off the bus), and it negotiates NTB sizes the gadget will not honour. The
+# patched module (kernel/README.md, built by kernel/cdc_ncm/build.sh) fixes all
+# three. Match on MODULE_VERSION, not taint: an older patched module is tainted
+# "O" too and would make the swap a silent no-op.
+# Self-heal before every attempt: a run that died between "unload cdc_ncm" (or
+# "drivers_autoprobe=0") and the post-auth reload would otherwise leave the
+# next attempts unable to see the car enumerate at all.
+echo 1 > /sys/bus/usb/drivers_autoprobe 2>/dev/null || true
+modprobe cdc_ncm 2>/dev/null || true
+# The avahi variant (RASCAR_CTRL_VIA_AVAHI=1) deliberately leaks
+# avahi-publish-service so the record outlives the call that made it; a leftover
+# from the PREVIOUS attempt would race this attempt's raw responder on the same name.
+pkill -f "avahi-publish-service .*_carplay-ctrl" 2>/dev/null || true
+
+KO=${RASCAR_CDC_NCM_KO:-/usr/local/lib/rascar/modules/$(uname -r)/cdc_ncm.ko}
+WANT_NCM_VER=$(/usr/sbin/modinfo -F version "$KO" 2>/dev/null)
+HAVE_NCM_VER=$(cat /sys/module/cdc_ncm/version 2>/dev/null)
+if [[ -f $KO && -n $WANT_NCM_VER && $HAVE_NCM_VER != "$WANT_NCM_VER" ]]; then
+    echo "loading patched cdc_ncm $WANT_NCM_VER (had '${HAVE_NCM_VER:-stock}')" | tee -a "$LOG"
+    modprobe -r cdc_mbim cdc_ncm 2>&1 | tee -a "$LOG"
+    modprobe cdc_ether 2>&1 | tee -a "$LOG"
+    insmod "$KO" 2>&1 | tee -a "$LOG" || echo "insmod cdc_ncm failed (continuing)" | tee -a "$LOG"
+fi
+# Key on the VERSION STAMP, never on a property the wrong build also has. A
+# module built against mismatched headers can load as [permanent] and then
+# cannot be swapped out without a reboot; say so loudly.
+NOW_NCM_VER=$(cat /sys/module/cdc_ncm/version 2>/dev/null)
+if [[ ! -f $KO ]]; then
+    echo "!!! patched cdc_ncm not found at $KO — run kernel/cdc_ncm/build.sh (the stock driver cannot bring up the car's NCM link)" | tee -a "$LOG"
+elif [[ -n ${WANT_NCM_VER:-} && ${NOW_NCM_VER:-} != "$WANT_NCM_VER" ]]; then
+    echo "!!! cdc_ncm WANTED ${WANT_NCM_VER} but ${NOW_NCM_VER:-none} is resident — REBOOT the Pi (old module is permanent); this attempt runs WITHOUT the NCM hold" | tee -a "$LOG"
+elif [[ -e /sys/module/cdc_ncm/parameters/hold_apple_gadget ]]; then
+    echo "cdc_ncm ${NOW_NCM_VER:-?} resident, hold_apple_gadget available" | tee -a "$LOG"
+fi
+echo "cdc_ncm version=$(cat /sys/module/cdc_ncm/version 2>/dev/null || echo stock) taint=$(cat /sys/module/cdc_ncm/taint 2>/dev/null)" | tee -a "$LOG"
+# IPv6 DAD off so the NCM fe80 is usable instantly (matches ncm.rs; belt-and-braces).
+echo 0 > /proc/sys/net/ipv6/conf/default/accept_dad 2>/dev/null
+echo 0 > /proc/sys/net/ipv6/conf/default/dad_transmits 2>/dev/null
+
+# A run that fails after the Phase 3 role switch exits with the port still in
+# host mode (no revert past Phase 3), and the next gadget bind would then fail.
+# Put the controller back in device mode before every attempt.
+MODE=/sys/kernel/debug/usb/fc000000.usb/mode
+if [[ -r $MODE && $(cat "$MODE" 2>/dev/null) != device ]]; then
+    echo "dwc3 mode was '$(cat "$MODE")' — resetting to device before this attempt" | tee -a "$LOG"
+    echo device > "$MODE" 2>&1 | tee -a "$LOG"
+    sleep 1
+fi
+# The role switch unbinds the fusb302 Type-C driver so tcpm cannot force the port
+# back to device mode; a run that dies before reverting leaves it unbound.
+# 6-0022 = the fusb302 on I2C bus 6 of the Orange Pi 5 Plus (RASCAR_FUSB302_I2C).
+FUSB_DRV=/sys/bus/i2c/drivers/typec_fusb302
+FUSB_DEV=${RASCAR_FUSB302_I2C:-6-0022}
+if [[ -d $FUSB_DRV && -e /sys/bus/i2c/devices/$FUSB_DEV && ! -e /sys/bus/i2c/devices/$FUSB_DEV/driver ]]; then
+    echo "fusb302 $FUSB_DEV was left unbound — re-binding before this attempt" | tee -a "$LOG"
+    echo "$FUSB_DEV" > "$FUSB_DRV/bind" 2>&1 | tee -a "$LOG"
+    sleep 2
+fi
+
+# Discriminate two candidate ~6 s teardown mechanisms (diagnostic only).
+#
+#   (i)  PLATFORM: the Rockchip USB2 PHY implements no .set_mode, so dwc3 never
+#        tells it it became a host. It keeps running a B-device/BC1.2 charger
+#        state machine (dr_mode=otg + the car's VBUS reads as "charger
+#        attached"), armed at OTG_SCHEDULE_DELAY*3 = 6 s and re-arming every
+#        2 s. Charger detection calls rockchip_usb2phy_power_off() -- which
+#        kills the 480 MHz clock and drives D+/D- -- on a LIVE host link.
+#   (ii) PROTOCOL: kCarPlayControlClient_ConnectionTimeoutSeconds = 5 in the
+#        CarPlay SDK build matching this car, i.e. the head unit's timeout for
+#        dialling /ctrl-int/1/connect.
+#
+# Both constants match the measured 5.70 s +/- 0.02 s. This turns the PHY's own
+# dev_dbg lines on, so the run log says which one fired: look for
+# "chg detection work state" / "port power off" / "otg sm work" at the instant
+# of death => (i). Silence from the PHY => (ii).
+DYNDBG=/sys/kernel/debug/dynamic_debug/control
+if [[ -w $DYNDBG ]]; then
+    echo -n 'file phy-rockchip-inno-usb2.c +p' > "$DYNDBG" 2>/dev/null \
+        && echo "PHY dyndbg enabled (phy-rockchip-inno-usb2.c)" | tee -a "$LOG" \
+        || echo "PHY dyndbg enable FAILED (module built without dev_dbg?)" | tee -a "$LOG"
+else
+    echo "PHY dyndbg unavailable: $DYNDBG not writable" | tee -a "$LOG"
+fi
+
+/usr/local/sbin/rascar-preflight "$LOG" >/dev/null
+
+# Power budget: the board runs from the car's USB-C and its NVMe can drop off
+# PCIe under sustained load. Cap the A76 clusters (policy4/6, up to 2.4 GHz) —
+# streaming needs < 1 core (measured: libx264 30 fps = 0.66 core, Chromium 0.11).
+# RASCAR_CPU_MAX_KHZ=0 leaves the governor limits alone.
+CPU_MAX=${RASCAR_CPU_MAX_KHZ:-1800000}
+if [[ $CPU_MAX != 0 ]]; then
+    for pol in /sys/devices/system/cpu/cpufreq/policy4 /sys/devices/system/cpu/cpufreq/policy6; do
+        [[ -w $pol/scaling_max_freq ]] && echo "$CPU_MAX" > "$pol/scaling_max_freq" 2>/dev/null
+    done
+    echo "cpu cap: A76 scaling_max_freq=$(cat /sys/devices/system/cpu/cpufreq/policy4/scaling_max_freq 2>/dev/null)/$(cat /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq 2>/dev/null) kHz" | tee -a "$LOG"
+fi
+
+# Network capture for every attempt: unfiltered, on "any" so the CDC-NCM link is
+# caught the moment it appears mid-run, rotated so a long run cannot fill the
+# disk. A running session writes > 1 MB/s, so RASCAR_CAPTURE_SECONDS bounds it:
+# default 60 (the handshake), 0 = no capture, "full" = whole session.
+CAP_SECS=${RASCAR_CAPTURE_SECONDS:-60}
+if [[ $CAP_SECS == full ]]; then CAP=(); elif [[ $CAP_SECS == 0 ]]; then CAP=(false); else CAP=(timeout "$CAP_SECS"); fi
+echo "captures: RASCAR_CAPTURE_SECONDS=$CAP_SECS" | tee -a "$LOG"
+PCAP="${LOG%-carplay.log}-net.pcap"
+"${CAP[@]}" tcpdump -Z root -i any -s 0 -U -w "$PCAP" -C 100 -W 4 >"${LOG%-carplay.log}-tcpdump.log" 2>&1 &
+TCPDUMP_PID=$!
+echo "network capture -> $PCAP (pid $TCPDUMP_PID, unfiltered, -i any)" | tee -a "$LOG"
+
+# USB bus capture: the only way to tell from userspace whether a lost device
+# was the car pulling its own gadget, a bus error or a port event. usbmon0 =
+# every bus, so it catches the car on whichever bus xhci assigns it.
+modprobe usbmon 2>/dev/null || true
+UPCAP="${LOG%-carplay.log}-usb.pcap"
+if [[ -c /dev/usbmon0 ]]; then
+    "${CAP[@]}" tcpdump -Z root -i usbmon0 -s 0 -U -w "$UPCAP" -C 100 -W 4 >"${LOG%-carplay.log}-usbmon.log" 2>&1 &
+    USBMON_PID=$!
+    echo "USB bus capture -> $UPCAP (pid $USBMON_PID, usbmon0 = all buses)" | tee -a "$LOG"
+else
+    USBMON_PID=""
+    echo "USB bus capture UNAVAILABLE (/dev/usbmon0 missing)" | tee -a "$LOG"
+fi
+sleep 1
+
+"$BIN" --debug "$@" 2>&1 | tee -a "$LOG"
+rc=${PIPESTATUS[0]}
+
+# Kernel tail next to the run log: the PHY dev_dbg lines and the USB
+# disconnect/port-error events land here, timestamped, for attribution.
+# ISO timestamps, not --ctime: --ctime only resolves to the second, which is
+# useless for ordering cdc_ncm's bind against the disconnect (they land in the
+# same second). ISO carries microseconds.
+dmesg --time-format=iso | tail -400 > "${LOG%-carplay.log}-kernel.log" 2>/dev/null
+
+# Let the capture flush the last packets of the teardown, then stop it.
+sleep 2
+kill "$TCPDUMP_PID" 2>/dev/null
+wait "$TCPDUMP_PID" 2>/dev/null
+if [[ -n "$USBMON_PID" ]]; then
+    kill "$USBMON_PID" 2>/dev/null
+    wait "$USBMON_PID" 2>/dev/null
+fi
+
+echo "=== rascar-carplay run #$n exited rc=$rc at $(date -Is) uptime=$(cut -d' ' -f1 /proc/uptime)s" | tee -a "$LOG"
+sync
+exit "$rc"
