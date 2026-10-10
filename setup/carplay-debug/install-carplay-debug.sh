@@ -67,7 +67,7 @@ systemctl enable rascar-debugcap.service rascar-carplay.service avahi-daemon.ser
 
 if (( HOTSPOT )); then
     log "hotspot config"
-    if [[ $(wc -c < /etc/rascar/hotspot.pass 2>/dev/null || echo 0) -lt 8 ]]; then
+    if [[ $(stat -c %s /etc/rascar/hotspot.pass 2>/dev/null || echo 0) -lt 8 ]]; then
         # Bounded input: `tr < /dev/urandom | head` dies of SIGPIPE under pipefail.
         head -c 256 /dev/urandom | tr -dc 'a-km-np-zA-HJ-NP-Z2-9' | cut -c1-14 > /etc/rascar/hotspot.pass
         log "generated a hotspot passphrase in /etc/rascar/hotspot.pass"

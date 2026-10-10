@@ -25,6 +25,15 @@ Contents:
 
 ---
 
+
+> **How this guide was tested.** On the reference Orange Pi 5 Plus (Armbian 25.11 trixie, kernel
+> 6.18.20), `kernel/cdc_ncm/build.sh` fetched the stock source, patched and built a module whose
+> `srcversion` is identical to the one running in the reference car. `setup/install.sh --yes` with every
+> optional part was run end to end on a blank Debian trixie arm64 system: it completed, and the installed
+> dashboard served its pages and API. This installer has not yet been run on a freshly flashed board
+> followed by a drive (the reference car was set up step by step before it existed). Please report how
+> it goes for you.
+
 ## 1. Flash Armbian
 
 The reference build uses **Armbian 25.11 "trixie" (Debian 13), `current` kernel 6.18.x** (the
@@ -181,6 +190,9 @@ explains why. If you skipped it in the installer, build it now:
 sudo kernel/cdc_ncm/build.sh
 cat /sys/module/cdc_ncm/version 2>/dev/null   # "rascar-3" once loaded
 ```
+
+To build it without installing anything (for example to inspect it first):
+`sudo kernel/cdc_ncm/build.sh --dest /tmp/cdc_ncm-test`, then `modinfo /tmp/cdc_ncm-test/cdc_ncm.ko`.
 
 It needs the headers for the running kernel (the installer installs them). On Armbian the package is
 `linux-headers-current-rockchip64`. The module goes to

@@ -2,7 +2,7 @@
 #
 # build.sh — build and install the patched cdc_ncm module for the running kernel.
 #
-#   sudo kernel/cdc_ncm/build.sh [--no-autoload] [--src <cdc_ncm.c>]
+#   sudo kernel/cdc_ncm/build.sh [--no-autoload] [--src <cdc_ncm.c>] [--dest <dir>]
 #
 # 1. gets the stock drivers/net/usb/cdc_ncm.c matching `uname -r`
 #    (a linux-source tarball in /usr/src if one matches, else kernel.org);
@@ -14,6 +14,9 @@
 #    and, unless --no-autoload, also in /lib/modules/$(uname -r)/updates/ so the
 #    module the kernel autoloads is the patched one (the hold parameter defaults
 #    to off, so this is harmless for any other cdc_ncm device).
+#
+# --dest <dir> installs the module there instead (implies --no-autoload): handy to
+# build and inspect it without touching the system.
 #
 # Run it again after every kernel upgrade: a module only loads into the exact
 # kernel it was built for. It never unloads the module currently in use; the
@@ -36,7 +39,8 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --no-autoload) AUTOLOAD=0; shift ;;
         --src) SRC=$(readlink -f "${2:?--src needs a file}"); shift 2 ;;
-        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        --dest) DEST=${2:?--dest needs a directory}; AUTOLOAD=0; shift 2 ;;
+        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
         *) die "unknown option $1" ;;
     esac
 done

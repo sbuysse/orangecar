@@ -35,7 +35,7 @@ say "-- USB device controller"
 if [[ -d /sys/class/udc/$UDC ]]; then
     pass "UDC $UDC present, state=$(rd /sys/class/udc/$UDC/state)"
 else
-    fail "UDC $UDC missing (available: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')) — peripheral overlay not applied?"
+    fail "UDC $UDC missing (available: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')) — not an RK3588, or usb@fc000000 is host-only (check its dr_mode: it must be otg or peripheral)"
 fi
 bound=""
 for g in /sys/kernel/config/usb_gadget/*/; do

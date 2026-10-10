@@ -439,7 +439,11 @@ Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$RASCAR_UID/bus
 WantedBy=multi-user.target
 EOF
 rm -f /etc/systemd/system/rascar-app.service.d/dbus.conf
-loginctl enable-linger "$RASCAR_USER" || warn "could not enable lingering for $RASCAR_USER"
+# Without logind on the bus (chroot, early image build) fall back to the flag
+# file loginctl itself creates; logind reads it at the next boot.
+loginctl enable-linger "$RASCAR_USER" 2>/dev/null \
+    || { install -d /var/lib/systemd/linger && touch "/var/lib/systemd/linger/$RASCAR_USER"; } \
+    || warn "could not enable lingering for $RASCAR_USER"
 for g in audio video render input dialout netdev bluetooth; do
     if getent group "$g" >/dev/null; then usermod -aG "$g" "$RASCAR_USER"; fi
 done
