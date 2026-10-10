@@ -29,8 +29,12 @@ Contents:
 > **How this guide was tested.** On the reference Orange Pi 5 Plus (Armbian 25.11 trixie, kernel
 > 6.18.20), `kernel/cdc_ncm/build.sh` fetched the stock source, patched and built a module whose
 > `srcversion` is identical to the one running in the reference car. `setup/install.sh --yes` with every
-> optional part was run end to end on a blank Debian trixie arm64 system: it completed, and the installed
-> dashboard served its pages and API. This installer has not yet been run on a freshly flashed board
+> optional part was run end to end on a blank Debian trixie arm64 system: it completed, a second run
+> changed nothing, and the installed dashboard served its pages and API. On a blank system with a working
+> systemd, after a reboot, every unit came up by itself (`rascar-app` as the dashboard user with
+> lingering, the agent idle, the guards running), and only `rascar-carplay` waited for USB hardware.
+> The released `rascar-carplay` passes the five scenarios of [tools/bench](../tools/bench/README.md)
+> exactly like the build that runs in the reference car. This installer has not yet been run on a freshly flashed board
 > followed by a drive (the reference car was set up step by step before it existed). Please report how
 > it goes for you.
 

@@ -16,7 +16,7 @@ Thanks for helping. The most useful contributions right now are:
 - A capture from a real car beats any reference implementation. Say which car and head unit it came from.
 - Mark anything you have not verified as unverified.
 - Code comments, commit messages and docs are in English.
-- Keep `cargo test --workspace` green, run `node --check` on changed JavaScript and `bash -n` on shell scripts.
+- Keep `cargo test --workspace` green, run `tools/bench/session_survival_test.sh` after any change in `carplay/`, run `node --check` on changed JavaScript and `bash -n` on shell scripts.
 - Do not commit certificates, keys, captures containing VINs, or anything tied to a person.
 
 ## Building

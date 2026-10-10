@@ -110,6 +110,7 @@ The full step-by-step guide is in **[docs/install.md](docs/install.md)**, and ev
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Symptom → cause → fix |
 | [docs/tested-vehicles.md](docs/tested-vehicles.md) | Cars known to work, and a template to add yours |
 | [docs/ota.md](docs/ota.md) | Optional self-hosted signed updates and log upload |
+| [tools/bench/README.md](tools/bench/README.md) | Test a CarPlay session on a PC, with a simulated head unit |
 | [carplay/README.md](carplay/README.md), [app/README.md](app/README.md) | Crate-level details |
 | [experimental/README.md](experimental/README.md) | The Android Auto attempts (source and head unit) |
 
